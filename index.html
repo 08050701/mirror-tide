@@ -1,0 +1,1203 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#05080f" />
+  <meta name="referrer" content="no-referrer" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.open-meteo.com; img-src 'self' data:; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+  <title>水鏡絲綢 — 聲音視覺化</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #05080f;
+      --pearl: #e8f6ff;
+      --mist: rgba(226, 245, 255, 0.62);
+      --glass: rgba(8, 14, 25, 0.54);
+      --line: rgba(220, 245, 255, 0.16);
+      --accent: #8fe7ff;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--ink);
+      font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+    }
+
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 50% 46%, transparent 0 32%, rgba(0, 0, 0, .34) 76%, rgba(0, 0, 0, .72) 100%),
+        linear-gradient(180deg, rgba(255,255,255,.025), transparent 22%, rgba(0,0,0,.2));
+      z-index: 2;
+    }
+
+    canvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .ui {
+      position: fixed;
+      inset: 0;
+      z-index: 4;
+      pointer-events: none;
+      color: var(--pearl);
+      opacity: 1;
+      transition: opacity .7s ease;
+    }
+
+    body.screen-only .ui { opacity: 0; }
+    body.screen-only .ui * { pointer-events: none !important; }
+
+    .brand {
+      position: absolute;
+      top: clamp(22px, 4vw, 48px);
+      left: clamp(22px, 4vw, 56px);
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      font-size: clamp(.92rem, 1.2vw, 1.08rem);
+      font-weight: 500;
+      text-shadow: 0 0 26px rgba(139, 226, 255, .28);
+    }
+
+    .brand span {
+      display: block;
+      margin-top: 7px;
+      color: var(--mist);
+      letter-spacing: .12em;
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: .8rem;
+      text-transform: none;
+    }
+
+    .status {
+      position: absolute;
+      top: clamp(24px, 4vw, 50px);
+      right: clamp(22px, 4vw, 56px);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--mist);
+      font-size: .9rem;
+      letter-spacing: .08em;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: rgba(210, 242, 255, .4);
+      box-shadow: 0 0 0 5px rgba(135, 225, 255, .04);
+      transition: background .4s, box-shadow .12s, transform .12s;
+      will-change: transform, box-shadow;
+    }
+
+    .status.live .status-dot {
+      background: #b9f4ff;
+      box-shadow: 0 0 18px rgba(102, 222, 255, .75);
+    }
+
+    .status.resume { pointer-events: auto; cursor: pointer; }
+    .status.resume .status-dot { animation: breathe 1.8s ease-in-out infinite; }
+
+    @keyframes breathe {
+      50% { transform: scale(1.55); opacity: .62; }
+    }
+
+    .start {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(88vw, 510px);
+      padding: 36px 34px 30px;
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: linear-gradient(145deg, rgba(15, 25, 42, .66), rgba(4, 9, 17, .38));
+      box-shadow: 0 28px 80px rgba(0, 0, 0, .36), inset 0 1px 0 rgba(255,255,255,.06);
+      backdrop-filter: blur(24px) saturate(120%);
+      text-align: center;
+      pointer-events: auto;
+      transition: opacity .8s ease, transform .8s cubic-bezier(.2,.8,.2,1), visibility .8s;
+    }
+
+    .start.hidden {
+      opacity: 0;
+      visibility: hidden;
+      transform: translate(-50%, -46%) scale(.97);
+    }
+
+    .start-kicker {
+      margin: 0 0 14px;
+      color: var(--mist);
+      font-size: .82rem;
+      letter-spacing: .24em;
+      text-transform: uppercase;
+    }
+
+    .start h1 {
+      margin: 0;
+      font-family: "Noto Serif TC", "Songti TC", "PMingLiU", serif;
+      font-size: clamp(2rem, 6vw, 3.25rem);
+      font-weight: 400;
+      letter-spacing: .08em;
+    }
+
+    .start p {
+      max-width: 36ch;
+      margin: 18px auto 26px;
+      color: rgba(232, 246, 255, .67);
+      line-height: 1.8;
+      font-size: 1rem;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid rgba(210, 244, 255, .28);
+      border-radius: 999px;
+      padding: 13px 24px;
+      color: #effbff;
+      background: rgba(218, 246, 255, .08);
+      font: inherit;
+      letter-spacing: .12em;
+      cursor: pointer;
+      transition: background .25s, border-color .25s, transform .25s;
+    }
+
+    button:hover { background: rgba(218, 246, 255, .15); border-color: rgba(218, 246, 255, .5); }
+    button:active { transform: scale(.97); }
+    button:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+
+    .controls {
+      position: absolute;
+      left: clamp(18px, 4vw, 54px);
+      bottom: clamp(18px, 4vw, 44px);
+      width: min(300px, calc(100vw - 36px));
+      padding: 18px 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--glass);
+      backdrop-filter: blur(18px);
+      pointer-events: auto;
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity .65s .35s, transform .65s .35s;
+    }
+
+    .controls.visible { opacity: 1; transform: none; }
+
+    .control-row {
+      display: grid;
+      grid-template-columns: 76px 1fr;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 11px;
+      color: rgba(235, 249, 255, .73);
+      font-size: .9rem;
+      letter-spacing: .05em;
+    }
+
+    .control-row:last-of-type { margin-bottom: 15px; }
+
+    input[type="range"] {
+      width: 100%;
+      height: 18px;
+      margin: 0;
+      accent-color: #a6eaff;
+      cursor: pointer;
+    }
+
+    .actions { display: flex; gap: 8px; }
+    .actions button { flex: 1; padding: 9px 11px; font-size: .82rem; }
+
+    .subtitle-wrap {
+      position: absolute;
+      left: 50%;
+      bottom: clamp(34px, 6vw, 70px);
+      transform: translateX(-50%);
+      width: min(72vw, 820px);
+      text-align: center;
+      pointer-events: none;
+    }
+
+    .subtitle {
+      display: inline-block;
+      max-width: 100%;
+      min-height: 1.8em;
+      padding: 10px 18px;
+      border-radius: 18px;
+      color: rgba(242, 251, 255, .9);
+      background: rgba(4, 10, 18, .24);
+      text-shadow: 0 0 18px rgba(158, 231, 255, .5);
+      backdrop-filter: blur(8px);
+      font-family: "Noto Serif TC", "Songti TC", serif;
+      font-size: clamp(1.05rem, 2vw, 1.45rem);
+      letter-spacing: .08em;
+      line-height: 1.65;
+      opacity: 0;
+      transition: opacity .5s;
+    }
+
+    .subtitle.show { opacity: 1; }
+
+    .subtitle[data-state="heard"] {
+      color: rgba(216, 239, 248, .68);
+      font-size: clamp(.92rem, 1.55vw, 1.12rem);
+      background: rgba(4, 10, 18, .16);
+    }
+
+    .subtitle[data-state="reply"] {
+      color: rgba(250, 253, 255, .96);
+      box-shadow: 0 0 36px rgba(111, 215, 255, .08);
+    }
+
+    .subtitle[data-state="error"] { color: rgba(224, 235, 240, .7); }
+
+    .hint {
+      position: absolute;
+      right: clamp(22px, 4vw, 56px);
+      bottom: clamp(24px, 4vw, 48px);
+      color: rgba(226, 245, 255, .46);
+      font-size: .84rem;
+      letter-spacing: .08em;
+      text-align: right;
+      line-height: 1.8;
+    }
+
+    @media (max-width: 700px) {
+      .brand span, .hint { display: none; }
+      .controls { bottom: 16px; }
+      .subtitle-wrap { bottom: 178px; width: 88vw; }
+      .start { padding: 30px 22px 26px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gl" aria-label="會隨聲音流動的水鏡絲綢視覺"></canvas>
+
+  <main class="ui">
+    <div class="brand">MIRROR TIDE<span>voice / water / silk</span></div>
+    <div id="status" class="status"><i class="status-dot"></i><span id="statusText">靜水模式</span></div>
+
+    <section id="start" class="start" aria-labelledby="title">
+      <p class="start-kicker">聲音讓深水甦醒</p>
+      <h1 id="title">水鏡・深潛</h1>
+      <p id="startCopy">點一下喚醒水室。你的一句話會化成一道從深處靠近的水光，再慢慢沉回安靜。</p>
+      <button id="startBtn" type="button">喚醒水鏡</button>
+    </section>
+
+    <section id="controls" class="controls" aria-label="視覺控制">
+      <label class="control-row"><span>靈敏度</span><input id="sensitivity" type="range" min="0.5" max="3" value="1.6" step="0.05" /></label>
+      <label class="control-row"><span>絲綢感</span><input id="silk" type="range" min="0" max="1.8" value="1.05" step="0.01" /></label>
+      <label class="control-row"><span>餘波</span><input id="echo" type="range" min="0.75" max="0.98" value="0.92" step="0.01" /></label>
+      <div class="actions">
+        <button id="paletteBtn" type="button">換一種水色</button>
+        <button id="fullBtn" type="button">全螢幕</button>
+      </div>
+    </section>
+
+    <div class="subtitle-wrap"><div id="subtitle" class="subtitle" aria-live="polite"></div></div>
+    <div class="hint">點擊水面喚醒，再說一句話<br />移動游標撥動絲流・S 純畫面</div>
+  </main>
+
+  <script>
+    const canvas = document.querySelector('#gl');
+    const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance' });
+    if (!gl) document.body.innerHTML = '<p style="padding:2rem;color:white">此瀏覽器需要 WebGL2 才能顯示作品。</p>';
+
+    const vertexSource = `#version 300 es
+      in vec2 aPos;
+      out vec2 vUv;
+      void main(){ vUv = aPos * .5 + .5; gl_Position = vec4(aPos, 0., 1.); }
+    `;
+
+    const fragmentSource = `#version 300 es
+      precision highp float;
+      in vec2 vUv;
+      out vec4 outColor;
+      uniform vec2 uResolution;
+      uniform vec2 uPointer;
+      uniform float uTime;
+      uniform float uLevel;
+      uniform float uBass;
+      uniform float uMid;
+      uniform float uHigh;
+      uniform float uImpulse;
+      uniform vec2 uEchoOrigin;
+      uniform float uEchoAge;
+      uniform float uEchoStrength;
+      uniform float uSilk;
+      uniform float uPalette;
+      uniform float uHover;
+      uniform float uAwake;
+      uniform float uVoice;
+      uniform float uThinking;
+      uniform float uResponse;
+      uniform float uRain;
+      uniform float uWind;
+      uniform float uCloud;
+      uniform float uNight;
+      uniform float uFlux;
+      uniform float uSpectrum[24];
+      uniform float uWaveform[32];
+
+      float hash21(vec2 p){
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+      }
+
+      float noise(vec2 p){
+        vec2 i = floor(p), f = fract(p);
+        f = f*f*(3.-2.*f);
+        return mix(mix(hash21(i), hash21(i+vec2(1,0)), f.x),
+                   mix(hash21(i+vec2(0,1)), hash21(i+vec2(1)), f.x), f.y);
+      }
+
+      float fbm(vec2 p){
+        float v=0., a=.5;
+        mat2 r=mat2(.82,-.57,.57,.82);
+        for(int i=0;i<5;i++){ v+=a*noise(p); p=r*p*2.03+3.1; a*=.5; }
+        return v;
+      }
+
+      vec3 palette(float id, float t){
+        id=mod(id,4.);
+        if(id<0.) id+=4.;
+        vec3 a0=vec3(.015,.045,.075), b0=vec3(.38,.80,1.0), c0=vec3(.72,.48,1.0);
+        vec3 a1=vec3(.012,.055,.050), b1=vec3(.42,1.0,.78), c1=vec3(.55,.73,1.0);
+        vec3 a2=vec3(.040,.025,.070), b2=vec3(.96,.54,.91), c2=vec3(.42,.76,1.0);
+        vec3 a3=vec3(.045,.050,.055), b3=vec3(.94,.91,.82), c3=vec3(.66,.86,1.0);
+        vec3 lo=mix(a0,mix(b0,c0,t),smoothstep(.0,1.,t));
+        vec3 mi=mix(a1,mix(b1,c1,t),smoothstep(.0,1.,t));
+        vec3 hi=mix(a2,mix(b2,c2,t),smoothstep(.0,1.,t));
+        vec3 pearl=mix(a3,mix(b3,c3,t),smoothstep(.0,1.,t));
+        float f=smoothstep(0.,1.,fract(id));
+        return id<1.?mix(lo,mi,f):(id<2.?mix(mi,hi,f):(id<3.?mix(hi,pearl,f):mix(pearl,lo,f)));
+      }
+
+      void main(){
+        float aspect=uResolution.x/uResolution.y;
+        vec2 uv=(vUv-.5)*vec2(aspect,1.);
+        vec2 pointer=(uPointer-.5)*vec2(aspect,1.);
+
+        // 三種尺度的長波先扭動整個觀看空間，避免水幕只有直線流動。
+        float swellSpeed=.22+uWind*.34+uVoice*.20;
+        float swellA=sin(uv.x*3.2+uTime*swellSpeed+sin(uv.y*2.1-uTime*.13));
+        float swellB=sin(uv.y*5.7-uTime*(.17+uWind*.22)+uv.x*1.8);
+        float swellC=sin((uv.x+uv.y)*9.4+uTime*.31)*.35;
+        vec2 waterWarp=vec2(swellA+swellC,swellB-swellC)*(.010+.010*uWind+.008*uVoice);
+        uv+=waterWarp;
+
+        // 展場攝影機會自行漂移；uPointer 在展覽模式由低頻 Lissajous 路徑驅動。
+        float pointerDistance=length(uv-pointer);
+        float hoverWave=sin(pointerDistance*118.-uTime*12.)*exp(-pointerDistance*21.)*uHover;
+        vec2 gaze=pointer*vec2(.24,.16);
+        gaze+=normalize(uv-pointer+vec2(.0001))*hoverWave*.006;
+
+        float lowSpectrum=(uSpectrum[1]+uSpectrum[3]+uSpectrum[5]+uSpectrum[7])*.25;
+        float midSpectrum=(uSpectrum[9]+uSpectrum[12]+uSpectrum[15]+uSpectrum[18])*.25;
+
+        // 真正的攝影機運動：前進、橫移、升降與輕微側傾同時存在。
+        float cameraSpeed=mix(.055,.135,uAwake)+uVoice*.075+uResponse*.095+uWind*.045;
+        float cameraBank=sin(uTime*.071)*.105+sin(uTime*.193+1.7)*.028+(uSpectrum[6]-uSpectrum[17])*.055;
+        mat2 bankMatrix=mat2(cos(cameraBank),-sin(cameraBank),sin(cameraBank),cos(cameraBank));
+        vec2 cameraOrbit=vec2(sin(uTime*.083+1.1),cos(uTime*.061-1.4))*(.055+.045*uWind);
+        float cameraDolly=sin(uTime*.097)*.18+sin(uTime*.037+2.4)*.12;
+        vec2 cameraView=bankMatrix*(uv+gaze*.58);
+        vec3 rayOrigin=vec3(gaze*.68+cameraOrbit,3.35+cameraDolly);
+        vec3 rayDirection=normalize(vec3(cameraView*vec2(.79,.70),-1.34+uResponse*.045));
+        float travel=.18;
+        float transmittance=1.;
+        vec3 chamberLight=vec3(0.);
+
+        float replyLife=max(uResponse,uEchoStrength*exp(-max(0.,uEchoAge-.25)*.52));
+        float replyProgress=smoothstep(0.,2.9,uEchoAge);
+        float replyDepth=mix(5.65,.42,replyProgress);
+
+        for(int i=0;i<44;i++){
+          float fi=float(i);
+          vec3 p=rayOrigin+rayDirection*travel;
+          float depth01=clamp(travel/6.25,0.,1.);
+          float flowZ=p.z+uTime*cameraSpeed;
+
+          // 洞壁會向遠方收束；左右、頂部三片水幕各有自己的折線，不再上下鏡像。
+          float silkRidges=pow(.5+.5*sin(p.y*8.2+p.x*3.4+flowZ*5.1+noise(p.xz*1.8)*3.),11.);
+
+          float leftEdge=-.73+.14*sin(flowZ*.88)+.06*sin(p.y*3.1+flowZ*2.4);
+          float rightEdge=.67+.17*sin(flowZ*.71+2.2)+.05*sin(p.y*4.4-flowZ);
+          float roofEdge=.57+.13*sin(flowZ*.93+1.)+.05*sin(p.x*4.-flowZ*1.8);
+          float floorEdge=-.64+.10*sin(flowZ*.78-1.7)+.045*sin(p.x*5.+flowZ);
+          float leftCurtain=exp(-abs(p.x-leftEdge)*19.)*(.25+.75*smoothstep(.04,.75,abs(p.y-.08)));
+          float rightCurtain=exp(-abs(p.x-rightEdge)*22.)*(.20+.80*smoothstep(.10,.70,abs(p.y+.14)));
+          float roofCurtain=exp(-abs(p.y-roofEdge)*20.)*smoothstep(.12,.76,abs(p.x-.16));
+          float floorCurtain=exp(-abs(p.y-floorEdge)*17.)*smoothstep(.22,.82,abs(p.x+.12));
+          float diagonalEdge=.72+.12*sin(flowZ*.66+2.4);
+          float diagonalCurtain=exp(-abs(p.x*.62+p.y*.78-diagonalEdge)*16.)*smoothstep(.18,.88,abs(p.x-p.y));
+          float scoreFold=sin(p.x*(2.4+midSpectrum*2.8)+flowZ*(1.15+lowSpectrum*1.6)+uTime*.14);
+          scoreFold+=sin(p.x*6.7-flowZ*.72+uTime*.09)*.27;
+          float spectralRibbon=exp(-abs(p.y-scoreFold*(.16+.10*midSpectrum)+.08)*mix(8.,15.,depth01));
+          spectralRibbon*=.24+.76*midSpectrum;
+          float curtainMass=leftCurtain+rightCurtain+roofCurtain+floorCurtain+diagonalCurtain*.55;
+          float microFibers=pow(.5+.5*sin(p.y*29.+p.x*17.+flowZ*16.5),mix(31.,19.,clamp(uSilk/1.8,0.,1.)));
+
+          // 近景纖維與深處霧粒隨距離縮小，產生可讀的空間尺度。
+          float filament=pow(.5+.5*sin((p.x*13.+p.y*7.)+flowZ*7.6),18.);
+          filament*=leftCurtain*.52+rightCurtain*.46+roofCurtain*.32+floorCurtain*.28;
+          float mistNoise=noise(p.xz*2.35+vec2(p.y*1.7,uTime*.018));
+          float mist=smoothstep(.72,1.,mistNoise)*(.16+.34*depth01);
+
+          float density=(leftCurtain*.88+rightCurtain*.76+roofCurtain*.62+floorCurtain*.48);
+          density*=.48+.88*silkRidges;
+          density+=diagonalCurtain*(.20+.58*silkRidges);
+          density+=spectralRibbon*(.34+.82*uVoice+.46*uFlux);
+          density+=curtainMass*microFibers*(.20+.18*uSilk);
+          density+=filament*.42+mist*.10;
+          density*=mix(.66,1.08,uAwake)*(.90+.58*uVoice+.34*uResponse);
+
+          // 回應是一片從深水向觀眾靠近的發光水幕，不使用雷達圓環。
+          float replySlice=exp(-abs(travel-replyDepth)*3.4)*replyLife;
+          float replyShape=exp(-length(p.xy-vec2(.10,-.04))*.92);
+          density+=replySlice*replyShape*1.42;
+
+          float alpha=(1.-exp(-density*.105))*transmittance;
+          vec3 silkColor=palette(uPalette,clamp(.16+depth01*.70+silkRidges*.12,0.,1.));
+          silkColor*=mix(.42,1.10,depth01)*(.92+.36*uVoice+.44*uResponse);
+          silkColor+=palette(uPalette,.82)*microFibers*.28;
+          silkColor+=palette(uPalette,.74)*spectralRibbon*(.38+.72*midSpectrum);
+          silkColor+=palette(uPalette,.92)*replySlice*replyShape*2.65;
+          chamberLight+=silkColor*alpha;
+          transmittance*=1.-min(.82,alpha*.88);
+          travel+=.142;
+        }
+
+        // 遠端只留一條偏心的冷光裂縫，讓視線真正落到深處而不是中心眼睛。
+        vec2 vanishing=uv+gaze*.36-vec2(.075,.045);
+        float deepSeam=exp(-abs(vanishing.x+.09*sin(vanishing.y*6.+uTime*.16))*38.);
+        deepSeam*=exp(-abs(vanishing.y)*2.7)*(.12+.28*uAwake);
+        float deepHaze=exp(-length(vanishing*vec2(.72,1.15))*4.2);
+
+        vec3 background=mix(vec3(.002,.007,.016),palette(uPalette,.08)*.11,deepHaze);
+        vec3 col=background+chamberLight;
+        col+=palette(uPalette,.74)*deepSeam;
+        col+=palette(uPalette,.34)*deepHaze*uThinking*(.10+.055*sin(uTime*1.15));
+
+        // 十六行「水譜」同時讀取 FFT 能量與即時波形，形成聲音自己的書寫。
+        float waterScore=0.;
+        for(int i=0;i<16;i++){
+          float fi=float(i);
+          float band=uSpectrum[i];
+          float wave=uWaveform[i*2];
+          float lane=(fi-7.5)*.041;
+          float curve=lane+wave*(.022+.070*band);
+          curve+=sin(uv.x*(4.2+fi*.23)-uTime*(.22+fi*.009)+fi*.91)*(.006+.025*band);
+          curve+=sin(uv.x*13.+uTime*.19+fi*1.7)*.004;
+          float scoreDistance=abs(uv.y-curve-(uv.x+.25)*lane*.18);
+          waterScore+=exp(-scoreDistance*mix(145.,78.,band))*(.06+.64*band);
+        }
+        float scoreMask=smoothstep(.02,.30,deepHaze)*(1.-smoothstep(.75,1.25,abs(uv.x)));
+        col+=palette(uPalette,.78)*waterScore*scoreMask*(.16+.42*uVoice+.24*uFlux);
+
+        // 以頻段峰值生成漂移光環；位置不固定在中央，避免回到雷達語彙。
+        float spectralHalos=0.;
+        for(int i=0;i<4;i++){
+          float fi=float(i);
+          float energy=uSpectrum[i*5+2];
+          vec2 center=vec2(sin(uTime*(.09+fi*.013)+fi*2.2),cos(uTime*(.067+fi*.011)+fi*1.4));
+          center*=vec2(.52,.31);
+          vec2 hq=(uv-center)*vec2(.72+fi*.08,1.18-fi*.06);
+          float radius=.13+fi*.07+energy*.16;
+          spectralHalos+=exp(-abs(length(hq)-radius)*mix(24.,13.,energy))*energy;
+        }
+        col+=palette(uPalette,.94)*spectralHalos*(.12+.42*uVoice+.30*uFlux);
+
+        // 近似振動膜的節線：頻率組合改變交叉花紋，而非套用固定符號。
+        float modeX=2.2+uSpectrum[4]*5.8;
+        float modeY=2.9+uSpectrum[13]*7.2;
+        float membrane=abs(sin((uv.x+.08)*modeX*3.14159)*sin((uv.y-.03)*modeY*3.14159));
+        membrane+=abs(sin((uv.x-uv.y*.42)*(.75*modeY)*3.14159))*.38;
+        float nodalLines=exp(-membrane*(18.-uFlux*7.))*uFlux;
+        col+=palette(uPalette,.58)*nodalLines*deepHaze*.34;
+
+        // 聲音形成斜向推進的水脈；不是中央雷達圓，而是穿過整個水室的波前。
+        float voiceFlow=fbm(uv*2.5+vec2(uTime*.08,-uTime*.045));
+        float voiceWave=pow(.5+.5*sin((uv.x*.72-uv.y*.46)*24.-uTime*2.4+voiceFlow*7.),13.);
+        col+=palette(uPalette,.80)*voiceWave*uVoice*(.12+.20*deepHaze);
+
+        // 雨勢驅動分散的小水圈；每個雨點有不同生命週期，避免規律掃描感。
+        vec2 rainSpace=(vUv+vec2(uTime*.006*uWind,-uTime*.009))*vec2(15.,9.);
+        vec2 rainCell=floor(rainSpace);
+        vec2 rainLocal=fract(rainSpace)-.5;
+        float rainSeed=hash21(rainCell);
+        float rainAge=fract(uTime*(.34+.26*uRain)+rainSeed);
+        float rainRadius=rainAge*.64;
+        float rainRing=exp(-abs(length(rainLocal)-rainRadius)*55.)*(1.-rainAge);
+        rainRing*=smoothstep(.72,.98,rainSeed)*uRain;
+        col+=palette(uPalette,.92)*rainRing*(.18+.28*uRain);
+
+        // 細碎交錯波紋黏在水幕表面，雲與濕度增加擴散感。
+        float surfaceNoise=fbm(uv*3.8+vec2(-uTime*.055,uTime*.035));
+        float crossWave=pow(.5+.5*sin(uv.x*18.+uv.y*11.+surfaceNoise*8.+uTime*.42),17.);
+        crossWave+=pow(.5+.5*sin(uv.x*31.-uv.y*16.-surfaceNoise*6.-uTime*.58),24.)*.55;
+        col+=palette(uPalette,.66)*crossWave*(.025+.075*uWind+.085*uVoice+.055*uRain);
+
+        // 讓回答的「靠近」可被肉眼讀出：遠處是一條細光，抵達時展成柔軟的水幕。
+        float replyWidth=mix(31.,3.8,replyProgress);
+        float replyCurtain=exp(-abs(vanishing.x+.13*sin(vanishing.y*5.4+uTime*.34))*replyWidth);
+        replyCurtain*=exp(-abs(vanishing.y)*mix(3.2,1.15,replyProgress))*replyLife;
+        col+=palette(uPalette,.90)*replyCurtain*mix(.48,1.48,replyProgress);
+        col+=palette(uPalette,.48)*deepHaze*replyLife*replyProgress*.27;
+
+        // 喚醒像水室吸入一口光；沉睡則把遠景慢慢收回黑暗。
+        float wakeBreath=.5+.5*sin(uTime*.78);
+        col+=palette(uPalette,.48)*deepHaze*uAwake*(.025+.025*wakeBreath+.10*uVoice);
+        col+=palette(uPalette,.22)*deepHaze*uCloud*(.045+.035*sin(uTime*.21));
+        col+=palette(uPalette,.90)*abs(hoverWave)*(.11+.16*uAwake);
+
+        // 微小懸浮物只在光線穿過時出現，補足尺度但不搶走構圖。
+        vec2 dustCell=floor((uv+vec2(uTime*.006,-uTime*.004))*vec2(210.,130.));
+        float dustHash=hash21(dustCell);
+        float dust=smoothstep(.9925,1.,dustHash)*deepHaze;
+        col+=palette(uPalette,.84)*dust*(.10+.18*uHigh);
+
+        float vignette=1.-smoothstep(.34,1.08,length(uv*vec2(.66,1.02)));
+        col*=.30+.82*vignette;
+        col*=1.-uCloud*.12;
+        col=mix(col,col*vec3(.72,.84,1.08),uNight*.24);
+        col+=(hash21(gl_FragCoord.xy+uTime)-.5)/255.;
+        col=1.-exp(-col*1.28);
+        outColor=vec4(pow(max(col,0.),vec3(.90)),1.);
+      }
+    `;
+
+    function compile(type, source){
+      const shader=gl.createShader(type);
+      gl.shaderSource(shader,source);
+      gl.compileShader(shader);
+      if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+      return shader;
+    }
+
+    const program=gl.createProgram();
+    gl.attachShader(program,compile(gl.VERTEX_SHADER,vertexSource));
+    gl.attachShader(program,compile(gl.FRAGMENT_SHADER,fragmentSource));
+    gl.linkProgram(program);
+    if(!gl.getProgramParameter(program,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+    gl.useProgram(program);
+
+    const quad=gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER,quad);
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]),gl.STATIC_DRAW);
+    const pos=gl.getAttribLocation(program,'aPos');
+    gl.enableVertexAttribArray(pos);
+    gl.vertexAttribPointer(pos,2,gl.FLOAT,false,0,0);
+
+    const U={};
+    ['uResolution','uPointer','uTime','uLevel','uBass','uMid','uHigh','uImpulse','uEchoOrigin','uEchoAge','uEchoStrength','uSilk','uPalette','uHover','uAwake','uVoice','uThinking','uResponse','uRain','uWind','uCloud','uNight','uFlux'].forEach(n=>U[n]=gl.getUniformLocation(program,n));
+    U.uSpectrum=gl.getUniformLocation(program,'uSpectrum[0]');
+    U.uWaveform=gl.getUniformLocation(program,'uWaveform[0]');
+
+    // 公開試玩版不包含付費 API 端點；回應完全在本頁產生。
+    const paletteIds={moon_blue:0,mint:1,violet:2,pearl:3};
+    const motionSettings={
+      slow_fold:{silk:1.35,echo:.95},
+      soft_bloom:{silk:1.58,echo:.92},
+      still_mirror:{silk:.72,echo:.97},
+      gentle_echo:{silk:1.12,echo:.94}
+    };
+
+    let audioCtx, analyser, timeData, freqData, stream, recognition;
+    let speechActive=false, speechBlocked=false;
+    let level=0, bass=0, mid=0, high=0, impulse=0, lastLevel=0;
+    let echoOrigin={x:.5,y:.5}, echoAge=8, echoStrength=0, lastEchoAt=0, previousFrameAt=0;
+    let pointer={x:.5,y:.5}, previousPointer={x:.5,y:.5,time:performance.now()}, palette=0, paletteTarget=0, silkVisual=1.05, running=false;
+    let awake=false, hoverVibration=0, pureScreen=false;
+    let responseInFlight=false, queuedSpeech='', pendingFinalText='', finalSpeechTimer=0;
+    let rawLevel=0, voiceEnvelope=0, thinkingEnvelope=0, responseEnvelope=0;
+    let responseHoldUntil=0, nextSpeechRestartAt=0, demoCycleIndex=-1;
+    const spectrumBands=new Float32Array(24);
+    const spectrumTargets=new Float32Array(24);
+    const previousSpectrum=new Float32Array(24);
+    const waveformBands=new Float32Array(32);
+    let spectralFlux=0;
+    const MIC_READY_KEY='mirror-tide-microphone-ready-v1';
+    const conversationHistory=[];
+    const pageParams=new URLSearchParams(location.search);
+    const demoMode=pageParams.get('demo')==='1';
+    const exhibitionMode=pageParams.get('control')!=='1';
+    const weatherLocation={
+      lat:Number(pageParams.get('lat')||25.0330),
+      lon:Number(pageParams.get('lon')||121.5654)
+    };
+    const weather={rain:0,wind:.18,cloud:.28,night:0};
+    const weatherTarget={rain:0,wind:.18,cloud:.28,night:0};
+    const echoEl=document.querySelector('#echo');
+    const senseEl=document.querySelector('#sensitivity');
+    const silkEl=document.querySelector('#silk');
+    const status=document.querySelector('#status');
+    const statusText=document.querySelector('#statusText');
+    const statusDot=document.querySelector('.status-dot');
+    const subtitle=document.querySelector('#subtitle');
+    const startKicker=document.querySelector('.start-kicker');
+    const startTitle=document.querySelector('#title');
+    const startCopy=document.querySelector('#startCopy');
+    const startBtn=document.querySelector('#startBtn');
+
+    function resize(){
+      const dpr=Math.min(devicePixelRatio||1,2);
+      const w=Math.floor(innerWidth*dpr), h=Math.floor(innerHeight*dpr);
+      if(canvas.width!==w||canvas.height!==h){ canvas.width=w; canvas.height=h; gl.viewport(0,0,w,h); }
+    }
+
+    function avgRange(data,a,b){ let sum=0; for(let i=a;i<b;i++) sum+=data[i]||0; return sum/Math.max(1,b-a)/255; }
+    function easeToward(current,target,rate,dt){ return target+(current-target)*Math.exp(-rate*dt); }
+    function clamp01(value){ return Math.max(0,Math.min(1,Number(value)||0)); }
+
+    async function loadWeather(){
+      try{
+        const fields='temperature_2m,relative_humidity_2m,precipitation,weather_code,cloud_cover,wind_speed_10m,is_day';
+        const url=`https://api.open-meteo.com/v1/forecast?latitude=${weatherLocation.lat}&longitude=${weatherLocation.lon}&current=${fields}&timezone=auto`;
+        const response=await fetch(url,{cache:'no-store'});
+        if(!response.ok) throw new Error(`Weather HTTP ${response.status}`);
+        const data=await response.json();
+        const current=data.current||{};
+        const code=Number(current.weather_code)||0;
+        const precipitation=Number(current.precipitation)||0;
+        const codedRain=(code>=95?.95:(code>=80?.72:(code>=51?.44:0)));
+        weatherTarget.rain=Math.max(clamp01(precipitation/2.4),codedRain);
+        weatherTarget.wind=clamp01((Number(current.wind_speed_10m)||0)/38);
+        weatherTarget.cloud=clamp01(((Number(current.cloud_cover)||0)*.72+(Number(current.relative_humidity_2m)||0)*.28)/100);
+        weatherTarget.night=Number(current.is_day)===0?1:0;
+        document.body.dataset.weather=String(code);
+        document.body.dataset.temperature=String(current.temperature_2m??'');
+      }catch(error){
+        const hour=new Date().getHours();
+        weatherTarget.night=(hour<6||hour>=18)?1:0;
+        console.warn('Weather atmosphere unavailable:',error);
+      }finally{
+        const preview=pageParams.get('weather');
+        if(preview==='rain') Object.assign(weatherTarget,{rain:.92,wind:.58,cloud:.86});
+        if(preview==='storm') Object.assign(weatherTarget,{rain:1,wind:.92,cloud:1,night:.65});
+        if(preview==='clear') Object.assign(weatherTarget,{rain:0,wind:.16,cloud:.12});
+      }
+    }
+
+    function triggerEcho(x,y,strength=1){
+      echoOrigin.x=x;
+      echoOrigin.y=y;
+      echoAge=0;
+      echoStrength=strength;
+      impulse=Math.max(impulse,.28);
+    }
+
+    function showSubtitle(text,state='reply',duration=5200){
+      subtitle.textContent=text;
+      subtitle.dataset.state=state;
+      subtitle.classList.add('show');
+      clearTimeout(subtitle._timer);
+      subtitle._timer=setTimeout(()=>subtitle.classList.remove('show'),duration);
+    }
+
+    function setSleeping(){
+      if(exhibitionMode){
+        awake=true;
+        status.classList.add('live');
+        status.classList.remove('resume');
+        statusText.textContent='水室持續聆聽';
+        return;
+      }
+      awake=false;
+      if(demoMode) return;
+      status.classList.remove('live');
+      status.classList.add('resume');
+      statusText.textContent='水面沉睡・點擊喚醒';
+    }
+
+    async function wakeMirror(){
+      if(responseInFlight||speechBlocked) return;
+      if(!running) revealExperience();
+      if(!stream) await startAudio();
+      awake=true;
+      status.classList.add('live');
+      status.classList.remove('resume');
+      statusText.textContent='水面已醒・正在聆聽';
+      subtitle.classList.remove('show');
+      triggerEcho(.5,.5,.68);
+      impulse=Math.max(impulse,.64);
+      if(!speechActive) startSpeech();
+    }
+
+    function applyMirrorReply(data){
+      const nextPalette=paletteIds[data.palette] ?? 0;
+      const wrapped=((palette%4)+4)%4;
+      let paletteDelta=nextPalette-wrapped;
+      if(paletteDelta>2) paletteDelta-=4;
+      if(paletteDelta<-2) paletteDelta+=4;
+      paletteTarget=palette+paletteDelta;
+      const motion=motionSettings[data.motion]||motionSettings.gentle_echo;
+      silkEl.value=String(motion.silk);
+      echoEl.value=String(motion.echo);
+      const strength=Math.max(.32,Math.min(.95,Number(data.intensity)||.4));
+      triggerEcho(.5,.5,strength);
+      impulse=Math.max(impulse,strength*.72);
+      responseHoldUntil=performance.now()+2600+strength*1500;
+      showSubtitle(data.reply||'水面仍在聽。','reply',6800);
+      if(data.speak && 'speechSynthesis' in window){
+        speechSynthesis.cancel();
+        const utterance=new SpeechSynthesisUtterance(data.reply);
+        utterance.lang='zh-TW';
+        utterance.rate=.86;
+        utterance.pitch=.92;
+        speechSynthesis.speak(utterance);
+      }
+    }
+
+    const localReplyPools={
+      comfort:[
+        '你的疲倦落下來，水面替它慢慢散開。',
+        '這句話先沉在柔光裡，不必急著浮起。',
+        '深流接住了重量，讓波紋替你呼吸。'
+      ],
+      joy:[
+        '水面亮了一層，像月光也聽見了。',
+        '這份歡喜正沿著波紋，向遠處閃動。',
+        '一束輕盈的水光，正在為你展開。'
+      ],
+      question:[
+        '問題落進深水，倒影正在換一種方向。',
+        '答案還沒浮起，水面先替你留一圈光。',
+        '讓這個疑問漂一會，深處會回來碰你。'
+      ],
+      calm:[
+        '水面把聲音放低，只留下緩慢的微光。',
+        '此刻不用回答，讓深流安靜地經過。',
+        '波紋正在變薄，替你留下一小片靜。'
+      ],
+      unclear:[
+        '聲音擦過水面，我仍在波紋裡聽你。',
+        '這句話化成霧了，水面替它留著位置。',
+        '再靠近水面一點，讓倒影聽得更清楚。'
+      ]
+    };
+
+    function localMirrorReply(text){
+      const comfort=/累|難過|傷心|痛|孤單|壓力|怕|焦慮|不好|哭/.test(text);
+      const joy=/開心|喜歡|快樂|很好|漂亮|美|愛|成功/.test(text);
+      const calm=/安靜|休息|慢|睡|放鬆|平靜/.test(text);
+      const question=/[？?]|為什麼|怎麼|什麼|嗎|呢/.test(text);
+      const intent=comfort?'comfort':joy?'joy':calm?'calm':question?'question':'unclear';
+      let hash=0;
+      for(let i=0;i<text.length;i++) hash=(hash*31+text.charCodeAt(i))>>>0;
+      const pool=localReplyPools[intent];
+      const color=/紫/.test(text)?'violet':/綠|青/.test(text)?'mint':/白|亮/.test(text)?'pearl':'moon_blue';
+      const motion=intent==='comfort'?'soft_bloom':intent==='calm'?'still_mirror':intent==='joy'?'gentle_echo':'slow_fold';
+      return {ok:true,reply:pool[hash%pool.length],intent,palette:color,motion,intensity:.38+(hash%31)/100,speak:false};
+    }
+
+    async function askMirror(text){
+      const clean=String(text||'').replace(/\s+/g,' ').trim().slice(0,480);
+      if(clean.length<2) return;
+      if(responseInFlight){ queuedSpeech=clean; return; }
+      responseInFlight=true;
+      responseHoldUntil=0;
+      status.classList.add('live');
+      statusText.textContent='水面正在回應';
+      showSubtitle(`「${clean}」`,'heard',2600);
+
+      try{
+        await new Promise(resolve=>setTimeout(resolve,620+Math.min(980,clean.length*24)));
+        const data=localMirrorReply(clean);
+        conversationHistory.push({role:'user',text:clean},{role:'assistant',text:data.reply});
+        if(conversationHistory.length>8) conversationHistory.splice(0,conversationHistory.length-8);
+        applyMirrorReply(data);
+      }catch(error){
+        console.warn('Local mirror reply unavailable:',error);
+        showSubtitle('水面暫時沒有回答，仍在聽你。','error',4200);
+        triggerEcho(.5,.5,.28);
+      }finally{
+        responseInFlight=false;
+        if(queuedSpeech){
+          const next=queuedSpeech;
+          queuedSpeech='';
+          setTimeout(()=>askMirror(next),260);
+        }else setSleeping();
+      }
+    }
+
+    function queueFinalSpeech(text){
+      pendingFinalText=`${pendingFinalText} ${text}`.trim();
+      clearTimeout(finalSpeechTimer);
+      finalSpeechTimer=setTimeout(()=>{
+        const phrase=pendingFinalText;
+        pendingFinalText='';
+        if(!exhibitionMode) awake=false;
+        askMirror(phrase);
+      },850);
+    }
+
+    function readAudio(ms){
+      if(!analyser) return;
+      analyser.getByteTimeDomainData(timeData);
+      analyser.getByteFrequencyData(freqData);
+      let sum=0;
+      for(const v of timeData){ const x=(v-128)/128; sum+=x*x; }
+      const rms=Math.sqrt(sum/timeData.length)*Number(senseEl.value);
+      rawLevel=rms;
+      level+=(rms-level)*(rms>level?.27:.045);
+      const nextBass=avgRange(freqData,1,18), nextMid=avgRange(freqData,18,90), nextHigh=avgRange(freqData,90,220);
+      bass+=(nextBass-bass)*(nextBass>bass?.18:.055);
+      mid+=(nextMid-mid)*(nextMid>mid?.20:.06);
+      high+=(nextHigh-high)*(nextHigh>high?.22:.07);
+      const nyquist=audioCtx.sampleRate*.5;
+      const minHz=70, maxHz=Math.min(8000,nyquist*.92);
+      let fluxTotal=0;
+      for(let i=0;i<spectrumBands.length;i++){
+        const startHz=minHz*Math.pow(maxHz/minHz,i/spectrumBands.length);
+        const endHz=minHz*Math.pow(maxHz/minHz,(i+1)/spectrumBands.length);
+        const startBin=Math.max(1,Math.floor(startHz/nyquist*freqData.length));
+        const endBin=Math.max(startBin+1,Math.ceil(endHz/nyquist*freqData.length));
+        let energy=0;
+        for(let bin=startBin;bin<Math.min(endBin,freqData.length);bin++) energy+=freqData[bin];
+        const normalized=Math.pow(energy/Math.max(1,endBin-startBin)/255,1.28);
+        spectrumTargets[i]=normalized;
+        fluxTotal+=Math.max(0,normalized-previousSpectrum[i]);
+        previousSpectrum[i]=normalized;
+        spectrumBands[i]+=(normalized-spectrumBands[i])*(normalized>spectrumBands[i]?.32:.085);
+      }
+      spectralFlux+=(Math.min(1,fluxTotal*1.85)-spectralFlux)*.19;
+      for(let i=0;i<waveformBands.length;i++){
+        const sampleIndex=Math.min(timeData.length-1,Math.floor(i/(waveformBands.length-1)*(timeData.length-1)));
+        const sample=(timeData[sampleIndex]-128)/128;
+        waveformBands[i]+=(sample-waveformBands[i])*.34;
+      }
+      const rise=level-lastLevel;
+      if(rise>.028 && ms-lastEchoAt>420){
+        const drift=Math.sin(ms*.006)*.11;
+        triggerEcho(.5+drift,.5+(bass-mid)*.07,Math.min(.82,.38+rise*9+level*1.8));
+        lastEchoAt=ms;
+      }
+      lastLevel=level;
+    }
+
+    function render(ms){
+      resize();
+      const dt=Math.min(.05,Math.max(0,(ms-previousFrameAt)/1000||0));
+      previousFrameAt=ms;
+      echoAge+=dt;
+      readAudio(ms);
+      let voiceTarget=Math.max(0,Math.min(1,(rawLevel-.014)/.075));
+      let thinkingTarget=responseInFlight?1:0;
+      let responseTarget=ms<responseHoldUntil?1:0;
+
+      if(demoMode && exhibitionMode){
+        const cycle=(ms%14000)/1000;
+        const cycleIndex=Math.floor(ms/14000);
+        if(cycle>1.1&&cycle<4.0) voiceTarget=.72+.18*Math.sin(cycle*4.2);
+        if(cycle>=4.0&&cycle<7.0) thinkingTarget=1;
+        if(cycle>=7.0&&cycle<11.2){
+          responseTarget=1;
+          if(demoCycleIndex!==cycleIndex){
+            triggerEcho(.5,.5,.76);
+            demoCycleIndex=cycleIndex;
+          }
+        }
+      }else if(demoMode && !analyser && ms-lastEchoAt>4200){
+        triggerEcho(.5+Math.sin(ms*.0017)*.18,.5+Math.cos(ms*.0012)*.08,.45);
+        lastEchoAt=ms;
+      }
+
+      if(demoMode&&!analyser){
+        const seconds=ms/1000;
+        let demoFlux=0;
+        for(let i=0;i<spectrumBands.length;i++){
+          const formantA=Math.exp(-Math.pow((i-5.5-Math.sin(seconds*.72)*1.8)/3.0,2));
+          const formantB=Math.exp(-Math.pow((i-14.5-Math.sin(seconds*.39+1.2)*2.4)/4.2,2));
+          const tremor=.58+.42*Math.sin(seconds*(2.2+i*.071)+i*.53);
+          const target=clamp01((.08+voiceTarget*.72+responseTarget*.48)*(formantA*.76+formantB*.56)*tremor);
+          demoFlux+=Math.max(0,target-spectrumBands[i]);
+          spectrumBands[i]=easeToward(spectrumBands[i],target,target>spectrumBands[i]?8.2:2.1,dt);
+        }
+        for(let i=0;i<waveformBands.length;i++){
+          const phase=i/(waveformBands.length-1)*Math.PI*2;
+          const target=(.15+voiceTarget*.42+responseTarget*.27)*(Math.sin(phase*2.0+seconds*3.1)+.38*Math.sin(phase*5.0-seconds*1.7));
+          waveformBands[i]=easeToward(waveformBands[i],target,9.5,dt);
+        }
+        spectralFlux=easeToward(spectralFlux,clamp01(demoFlux*1.8+responseTarget*.46),5.6,dt);
+        bass=easeToward(bass,.12+voiceTarget*.46,4.2,dt);
+        mid=easeToward(mid,.10+responseTarget*.52+voiceTarget*.22,3.6,dt);
+        high=easeToward(high,.08+voiceTarget*.28+spectralFlux*.25,4.5,dt);
+      }
+
+      voiceEnvelope=easeToward(voiceEnvelope,voiceTarget,voiceTarget>voiceEnvelope?7.5:1.55,dt);
+      thinkingEnvelope=easeToward(thinkingEnvelope,thinkingTarget,thinkingTarget>thinkingEnvelope?2.2:.82,dt);
+      responseEnvelope=easeToward(responseEnvelope,responseTarget,responseTarget>responseEnvelope?1.65:.52,dt);
+      palette=easeToward(palette,paletteTarget,.48,dt);
+      silkVisual=easeToward(silkVisual,Number(silkEl.value),.72,dt);
+      weather.rain=easeToward(weather.rain,weatherTarget.rain,.18,dt);
+      weather.wind=easeToward(weather.wind,weatherTarget.wind,.11,dt);
+      weather.cloud=easeToward(weather.cloud,weatherTarget.cloud,.09,dt);
+      weather.night=easeToward(weather.night,weatherTarget.night,.07,dt);
+
+      if(exhibitionMode){
+        const seconds=ms/1000;
+        const reactiveDrift=.018*voiceEnvelope+.032*responseEnvelope;
+        pointer.x=.5+Math.sin(seconds*.115)*.17+Math.sin(seconds*.307+1.4)*(.038+reactiveDrift);
+        pointer.y=.5+Math.sin(seconds*.087+2.2)*.115+Math.cos(seconds*.221)*(.030+reactiveDrift*.62);
+        hoverVibration=0;
+      }
+      gl.uniform2f(U.uResolution,canvas.width,canvas.height);
+      gl.uniform2f(U.uPointer,pointer.x,pointer.y);
+      gl.uniform1f(U.uTime,ms/1000);
+      gl.uniform1f(U.uLevel,Math.min(level*4,1));
+      gl.uniform1f(U.uBass,bass);
+      gl.uniform1f(U.uMid,mid);
+      gl.uniform1f(U.uHigh,high);
+      gl.uniform1f(U.uImpulse,impulse);
+      gl.uniform2f(U.uEchoOrigin,echoOrigin.x,echoOrigin.y);
+      gl.uniform1f(U.uEchoAge,echoAge);
+      gl.uniform1f(U.uEchoStrength,echoStrength);
+      gl.uniform1f(U.uSilk,silkVisual);
+      gl.uniform1f(U.uPalette,palette);
+      gl.uniform1f(U.uHover,hoverVibration);
+      gl.uniform1f(U.uAwake,awake?1:0);
+      gl.uniform1f(U.uVoice,voiceEnvelope);
+      gl.uniform1f(U.uThinking,thinkingEnvelope);
+      gl.uniform1f(U.uResponse,responseEnvelope);
+      gl.uniform1f(U.uRain,weather.rain);
+      gl.uniform1f(U.uWind,weather.wind);
+      gl.uniform1f(U.uCloud,weather.cloud);
+      gl.uniform1f(U.uNight,weather.night);
+      gl.uniform1f(U.uFlux,spectralFlux);
+      gl.uniform1fv(U.uSpectrum,spectrumBands);
+      gl.uniform1fv(U.uWaveform,waveformBands);
+      const pulse=Math.min(1,level*5+impulse*.45);
+      statusDot.style.transform=`scale(${1+pulse*.55})`;
+      statusDot.style.boxShadow=`0 0 ${8+pulse*24}px rgba(102,222,255,${.22+pulse*.62})`;
+      gl.drawArrays(gl.TRIANGLES,0,6);
+      impulse*=.94;
+      hoverVibration*=.88;
+      requestAnimationFrame(render);
+    }
+
+    async function microphonePermissionState(){
+      try{
+        const permission=await navigator.permissions.query({name:'microphone'});
+        return permission.state;
+      }catch{
+        return localStorage.getItem(MIC_READY_KEY)==='1'?'granted':'prompt';
+      }
+    }
+
+    function showMicrophoneOnboarding(){
+      startKicker.textContent='展前設定・只需一次';
+      startTitle.textContent='啟用水鏡聆聽';
+      startCopy.textContent='允許一次後，同一網址會直接回到聆聽。聲音用於即時視覺與瀏覽器語音辨識；瀏覽器可能使用其雲端語音服務。公開版不連接 GAS／OpenAI，也不儲存對話。';
+      startBtn.textContent='允許麥克風並進入展覽';
+      document.querySelector('#start').classList.remove('hidden');
+      statusText.textContent='等待展前麥克風設定';
+    }
+
+    async function startAudio(){
+      if(stream){
+        if(audioCtx?.state==='suspended') await audioCtx.resume();
+        return true;
+      }
+      try{
+        stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+        audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+        const source=audioCtx.createMediaStreamSource(stream);
+        analyser=audioCtx.createAnalyser();
+        analyser.fftSize=1024;
+        analyser.smoothingTimeConstant=.72;
+        source.connect(analyser);
+        timeData=new Uint8Array(analyser.fftSize);
+        freqData=new Uint8Array(analyser.frequencyBinCount);
+        status.classList.add('live');
+        statusText.textContent='水面已醒・正在聆聽';
+        localStorage.setItem(MIC_READY_KEY,'1');
+        return true;
+      }catch(err){
+        statusText.textContent='靜水模式・未使用麥克風';
+        console.warn('Microphone unavailable:',err);
+        return false;
+      }
+    }
+
+    function startSpeech(){
+      if(speechBlocked||speechActive) return;
+      const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+      if(!SR) return;
+      if(!recognition){
+        recognition=new SR();
+        recognition.lang='zh-TW';
+        recognition.continuous=true;
+        recognition.interimResults=true;
+      }
+      recognition.onstart=()=>{
+        speechActive=true;
+        status.classList.remove('resume');
+        if(awake) statusText.textContent='水面已醒・正在聆聽';
+      };
+      recognition.onresult=e=>{
+        if(!awake) return;
+        let finalText='',interim='';
+        for(let i=e.resultIndex;i<e.results.length;i++){
+          const text=e.results[i][0].transcript;
+          e.results[i].isFinal?finalText+=text:interim+=text;
+        }
+        if(interim.trim()) showSubtitle(interim.trim(),'heard',1500);
+        if(finalText.trim()) queueFinalSpeech(finalText.trim());
+      };
+      recognition.onerror=e=>{
+        if(e.error==='not-allowed'||e.error==='service-not-allowed'){
+          speechBlocked=true;
+          status.classList.remove('resume');
+          statusText.textContent=location.protocol==='file:'?'請用 HTTPS 開啟，權限才會被記住':'麥克風權限未開啟';
+        }
+      };
+      // 一般模式等待觀眾再喚醒；展覽模式沿用同一個已授權的辨識器自動復原。
+      recognition.onend=()=>{
+        speechActive=false;
+        if(exhibitionMode&&running&&!speechBlocked){
+          awake=true;
+          status.classList.add('live');
+          statusText.textContent='水室持續聆聽';
+          nextSpeechRestartAt=performance.now()+1200;
+          setTimeout(()=>{
+            if(exhibitionMode&&running&&!speechBlocked&&!speechActive&&performance.now()>=nextSpeechRestartAt) startSpeech();
+          },1250);
+        }else{
+          awake=false;
+        }
+        if(!exhibitionMode&&running&&!speechBlocked){
+          status.classList.add('resume');
+          status.classList.remove('live');
+          statusText.textContent='辨識暫停・點擊喚醒';
+        }
+      };
+      try{recognition.start();}catch{}
+    }
+
+    function revealExperience(){
+      running=true;
+      document.querySelector('#start').classList.add('hidden');
+      document.querySelector('#controls').classList.add('visible');
+    }
+
+    async function startExhibition(){
+      if(demoMode){
+        revealExperience();
+        awake=true;
+        pureScreen=true;
+        document.body.classList.add('screen-only');
+        return;
+      }
+      const permission=await microphonePermissionState();
+      if(permission!=='granted'){
+        showMicrophoneOnboarding();
+        return;
+      }
+      const ready=await startAudio();
+      if(!ready){ showMicrophoneOnboarding(); return; }
+      revealExperience();
+      awake=true;
+      pureScreen=true;
+      document.body.classList.add('screen-only');
+      statusText.textContent='水室持續聆聽';
+      if(!speechBlocked) startSpeech();
+    }
+
+    startBtn.addEventListener('click',async()=>{
+      if(exhibitionMode){
+        startBtn.disabled=true;
+        startBtn.textContent='正在開啟聆聽…';
+        const ready=await startAudio();
+        startBtn.disabled=false;
+        if(!ready){
+          startBtn.textContent='再試一次麥克風';
+          return;
+        }
+        revealExperience();
+        awake=true;
+        pureScreen=true;
+        document.body.classList.add('screen-only');
+        statusText.textContent='水室持續聆聽';
+        triggerEcho(.5,.5,.72);
+        if(!speechBlocked) startSpeech();
+        return;
+      }
+      revealExperience();
+      await wakeMirror();
+    });
+
+    status.addEventListener('click',wakeMirror);
+
+    if(exhibitionMode){
+      startExhibition();
+      if(demoMode){
+        triggerEcho(.5,.5,.58);
+        echoAge=.72;
+        lastEchoAt=performance.now();
+      }
+    }else if(demoMode){
+      revealExperience();
+      awake=true;
+      statusText.textContent='展示模式';
+      triggerEcho(.62,.56,.45);
+      echoAge=.72;
+      lastEchoAt=performance.now();
+      if(pageParams.get('test')==='1') setTimeout(()=>askMirror('今天有點累，想安靜一下。'),650);
+    }
+
+    document.querySelector('#paletteBtn').addEventListener('click',()=>{ paletteTarget=Math.floor(paletteTarget+1); triggerEcho(.5,.5,.48); });
+    document.querySelector('#fullBtn').addEventListener('click',()=>{ document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen(); });
+    addEventListener('pointermove',e=>{
+      if(exhibitionMode) return;
+      const now=performance.now();
+      const x=e.clientX/innerWidth, y=1-e.clientY/innerHeight;
+      const dt=Math.max(8,now-previousPointer.time);
+      const speed=Math.hypot(x-previousPointer.x,y-previousPointer.y)*1000/dt;
+      hoverVibration=Math.max(hoverVibration,Math.min(1,speed*2.6));
+      pointer.x=x; pointer.y=y;
+      previousPointer={x,y,time:now};
+    },{passive:true});
+    addEventListener('pointerdown',e=>{
+      if(exhibitionMode) return;
+      if(e.target.closest('.controls,button,input')) return;
+      const x=e.clientX/innerWidth, y=1-e.clientY/innerHeight;
+      if(running&&!awake&&!demoMode) wakeMirror();
+      else triggerEcho(x,y,.62);
+    });
+    addEventListener('keydown',e=>{
+      const key=e.key.toLowerCase();
+      if(key==='f') document.querySelector('#fullBtn').click();
+      if(key==='s'){
+        pureScreen=!pureScreen;
+        document.body.classList.toggle('screen-only',pureScreen);
+      }
+      if((key===' '||key==='enter')&&running&&!awake&&!demoMode) wakeMirror();
+    });
+    addEventListener('beforeunload',()=>{ running=false; stream?.getTracks().forEach(t=>t.stop()); recognition?.stop(); });
+
+    loadWeather();
+    setInterval(loadWeather,10*60*1000);
+    requestAnimationFrame(render);
+  </script>
+</body>
+</html>
