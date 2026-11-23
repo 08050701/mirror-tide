@@ -58,8 +58,13 @@
       transition: opacity .7s ease;
     }
 
-    body.screen-only .ui { opacity: 0; }
+    body.screen-only .ui { opacity: 1; }
     body.screen-only .ui * { pointer-events: none !important; }
+    body.screen-only .brand,
+    body.screen-only .status,
+    body.screen-only .start,
+    body.screen-only .controls,
+    body.screen-only .hint { opacity: 0 !important; visibility: hidden !important; }
 
     .brand {
       position: absolute;
@@ -251,6 +256,7 @@
     }
 
     .subtitle.show { opacity: 1; }
+    body.screen-only .subtitle.show { opacity: 1 !important; }
 
     .subtitle[data-state="heard"] {
       color: rgba(216, 239, 248, .68);
@@ -260,10 +266,61 @@
 
     .subtitle[data-state="reply"] {
       color: rgba(250, 253, 255, .96);
-      box-shadow: 0 0 36px rgba(111, 215, 255, .08);
+      padding: 14px 24px;
+      border: 1px solid rgba(190, 237, 255, .16);
+      background: rgba(4, 10, 20, .42);
+      box-shadow: 0 0 52px rgba(111, 215, 255, .18), inset 0 0 28px rgba(140, 220, 255, .045);
     }
 
     .subtitle[data-state="error"] { color: rgba(224, 235, 240, .7); }
+
+    body.screen-only .subtitle-wrap { bottom: clamp(38px, 9vh, 104px); }
+
+    .phase-signal {
+      position: absolute;
+      left: 50%;
+      top: 45%;
+      width: clamp(124px, 15vw, 210px);
+      aspect-ratio: 1;
+      transform: translate(-50%, -50%) scale(.82);
+      display: grid;
+      place-items: center;
+      opacity: 0;
+      transition: opacity .9s ease, transform 1.4s cubic-bezier(.2,.8,.2,1);
+    }
+
+    .phase-signal::before,
+    .phase-signal::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border: 1px solid rgba(178, 235, 255, .34);
+      border-radius: 50%;
+      box-shadow: 0 0 42px rgba(102, 213, 255, .13), inset 0 0 34px rgba(170, 230, 255, .07);
+      animation: phaseRipple 2.8s ease-out infinite;
+    }
+
+    .phase-signal::after { animation-delay: 1.35s; }
+
+    .phase-signal span {
+      font-family: "Noto Serif TC", "Songti TC", serif;
+      color: rgba(235, 249, 255, .82);
+      font-size: clamp(.8rem, 1.25vw, 1rem);
+      letter-spacing: .28em;
+      text-shadow: 0 0 22px rgba(128, 221, 255, .55);
+    }
+
+    body[data-phase="listening"] .phase-signal,
+    body[data-phase="thinking"] .phase-signal,
+    body[data-phase="reply"] .phase-signal { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    body[data-phase="thinking"] .phase-signal { opacity: .62; transform: translate(-50%, -50%) scale(.74); }
+    body[data-phase="reply"] .phase-signal { opacity: .92; transform: translate(-50%, -50%) scale(1.32); }
+
+    @keyframes phaseRipple {
+      0% { transform: scale(.35); opacity: 0; }
+      24% { opacity: .75; }
+      100% { transform: scale(1.48); opacity: 0; }
+    }
 
     .hint {
       position: absolute;
@@ -312,6 +369,7 @@
       </div>
     </section>
 
+    <div id="phaseSignal" class="phase-signal" aria-hidden="true"><span id="phaseText"></span></div>
     <div class="subtitle-wrap"><div id="subtitle" class="subtitle" aria-live="polite"></div></div>
     <div class="hint">點擊水面喚醒，再說一句話<br />移動游標撥動絲流・S 純畫面</div>
   </main>
@@ -654,6 +712,7 @@
     const statusText=document.querySelector('#statusText');
     const statusDot=document.querySelector('.status-dot');
     const subtitle=document.querySelector('#subtitle');
+    const phaseText=document.querySelector('#phaseText');
     const startKicker=document.querySelector('.start-kicker');
     const startTitle=document.querySelector('#title');
     const startCopy=document.querySelector('#startCopy');
@@ -757,7 +816,7 @@
       triggerEcho(.5,.5,strength);
       impulse=Math.max(impulse,strength*.72);
       responseHoldUntil=performance.now()+2600+strength*1500;
-      showSubtitle(data.reply||'水面仍在聽。','reply',6800);
+      showSubtitle(data.reply||'水面仍在聽。','reply',exhibitionMode?30000:12000);
       if(data.speak && 'speechSynthesis' in window){
         speechSynthesis.cancel();
         const utterance=new SpeechSynthesisUtterance(data.reply);
@@ -818,7 +877,7 @@
       responseHoldUntil=0;
       status.classList.add('live');
       statusText.textContent='水面正在回應';
-      showSubtitle(`「${clean}」`,'heard',2600);
+      showSubtitle(`「${clean}」`,'heard',3600);
 
       try{
         await new Promise(resolve=>setTimeout(resolve,620+Math.min(980,clean.length*24)));
@@ -947,6 +1006,11 @@
       voiceEnvelope=easeToward(voiceEnvelope,voiceTarget,voiceTarget>voiceEnvelope?7.5:1.55,dt);
       thinkingEnvelope=easeToward(thinkingEnvelope,thinkingTarget,thinkingTarget>thinkingEnvelope?2.2:.82,dt);
       responseEnvelope=easeToward(responseEnvelope,responseTarget,responseTarget>responseEnvelope?1.65:.52,dt);
+      const phase=responseEnvelope>.08?'reply':thinkingEnvelope>.10?'thinking':voiceEnvelope>.12?'listening':'idle';
+      if(document.body.dataset.phase!==phase){
+        document.body.dataset.phase=phase;
+        phaseText.textContent=phase==='listening'?'正在聽':phase==='thinking'?'沉入水中':phase==='reply'?'水面回應':'';
+      }
       palette=easeToward(palette,paletteTarget,.48,dt);
       silkVisual=easeToward(silkVisual,Number(silkEl.value),.72,dt);
       weather.rain=easeToward(weather.rain,weatherTarget.rain,.18,dt);
@@ -1154,6 +1218,7 @@
         triggerEcho(.5,.5,.58);
         echoAge=.72;
         lastEchoAt=performance.now();
+        if(pageParams.get('test')==='1') setTimeout(()=>askMirror('今天有點累，想安靜一下。'),1450);
       }
     }else if(demoMode){
       revealExperience();
