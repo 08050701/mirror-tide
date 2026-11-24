@@ -713,6 +713,8 @@
     let pointer={x:.5,y:.5}, previousPointer={x:.5,y:.5,time:performance.now()}, palette=0, paletteTarget=0, silkVisual=1.05, running=false;
     let awake=false, hoverVibration=0, pureScreen=false;
     let responseInFlight=false, queuedSpeech='', pendingFinalText='', finalSpeechTimer=0;
+    const TURN_PAUSE_MS=2800;
+    let pendingInterimText='', lastSpeechActivityAt=0;
     let rawLevel=0, voiceEnvelope=0, thinkingEnvelope=0, responseEnvelope=0;
     let responseHoldUntil=0, nextSpeechRestartAt=0, demoCycleIndex=-1;
     const spectrumBands=new Float32Array(24);
@@ -952,15 +954,28 @@
       }
     }
 
-    function queueFinalSpeech(text){
-      pendingFinalText=`${pendingFinalText} ${text}`.trim();
+    function markSpeechActivity(){
+      lastSpeechActivityAt=performance.now();
       clearTimeout(finalSpeechTimer);
+    }
+
+    function scheduleSpeechTurn(){
+      clearTimeout(finalSpeechTimer);
+      if(!pendingFinalText||pendingInterimText) return;
       finalSpeechTimer=setTimeout(()=>{
+        if(pendingInterimText) return;
+        if(performance.now()-lastSpeechActivityAt<TURN_PAUSE_MS){ scheduleSpeechTurn(); return; }
         const phrase=pendingFinalText;
         pendingFinalText='';
         if(!exhibitionMode) awake=false;
         askMirror(phrase);
-      },850);
+      },TURN_PAUSE_MS);
+    }
+
+    function queueFinalSpeech(text){
+      pendingFinalText=`${pendingFinalText} ${text}`.trim();
+      markSpeechActivity();
+      scheduleSpeechTurn();
     }
 
     function readAudio(ms){
@@ -1178,14 +1193,19 @@
       };
       recognition.onresult=e=>{
         if(!awake) return;
+        markSpeechActivity();
         let finalText='',interim='';
         for(let i=e.resultIndex;i<e.results.length;i++){
           const text=e.results[i][0].transcript;
           e.results[i].isFinal?finalText+=text:interim+=text;
         }
-        if(interim.trim()) showSubtitle(interim.trim(),'heard',1500);
+        pendingInterimText=interim.trim();
+        if(pendingInterimText) showSubtitle((pendingFinalText+' '+finalText+' '+pendingInterimText).trim(),'heard',5000);
         if(finalText.trim()) queueFinalSpeech(finalText.trim());
+        else scheduleSpeechTurn();
       };
+      recognition.onspeechstart=()=>{ if(awake) markSpeechActivity(); };
+      recognition.onspeechend=()=>{ if(awake){ lastSpeechActivityAt=performance.now(); scheduleSpeechTurn(); } };
       recognition.onerror=e=>{
         if(e.error==='not-allowed'||e.error==='service-not-allowed'){
           speechBlocked=true;
@@ -1196,6 +1216,16 @@
       // 一般模式等待觀眾再喚醒；展覽模式沿用同一個已授權的辨識器自動復原。
       recognition.onend=()=>{
         speechActive=false;
+        // A recognition service disconnect is not the end of a person's turn.
+        // Retain only confirmed segments; never silently submit a truncated interim result.
+        if(pendingInterimText){
+          pendingInterimText='';
+          clearTimeout(finalSpeechTimer);
+          showSubtitle('剛才有一段沒有聽完整，請接著說。','heard',6000);
+        }else if(pendingFinalText){
+          lastSpeechActivityAt=performance.now();
+          scheduleSpeechTurn();
+        }
         if(exhibitionMode&&running&&!speechBlocked){
           awake=true;
           status.classList.add('live');
