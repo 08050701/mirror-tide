@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#05080f" />
   <meta name="referrer" content="no-referrer" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.open-meteo.com; img-src 'self' data:; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.open-meteo.com https://script.google.com https://script.googleusercontent.com; img-src 'self' data:; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
   <title>水鏡絲綢 — 聲音視覺化</title>
   <style>
     :root {
@@ -684,7 +684,20 @@
     U.uSpectrum=gl.getUniformLocation(program,'uSpectrum[0]');
     U.uWaveform=gl.getUniformLocation(program,'uWaveform[0]');
 
-    // 公開試玩版不包含付費 API 端點；回應完全在本頁產生。
+    const GAS_ENDPOINT='https://script.google.com/macros/s/AKfycbwbbnXMvhBtFk-TlTw-88WT52D6v0irl4AK1FGOjeOpzItvYCtn1d57M5UbScTTsfOYJA/exec';
+    const apiClientId=(()=>{
+      const key='mirror-tide-api-client-v1';
+      try{
+        let value=localStorage.getItem(key);
+        if(!/^[A-Za-z0-9_-]{16,80}$/.test(value||'')){
+          value=crypto.randomUUID();
+          localStorage.setItem(key,value);
+        }
+        return value;
+      }catch{
+        return crypto.randomUUID();
+      }
+    })();
     const paletteIds={moon_blue:0,mint:1,violet:2,pearl:3};
     const motionSettings={
       slow_fold:{silk:1.35,echo:.95},
@@ -730,6 +743,23 @@
     weatherRefresh.addEventListener('click',()=>loadWeather());
     document.querySelector('#controls').append(weatherRefresh);
     let weatherPending=false, weatherTimer, weatherFailures=0, lastWeatherText='';
+    const aiReadout=document.createElement('div');
+    aiReadout.className='hint';
+    aiReadout.id='aiReadout';
+    aiReadout.style.cssText='top:255px;bottom:auto;max-width:340px';
+    aiReadout.textContent='AI 待命 · 問答使用 GAS／OpenAI';
+    document.querySelector('.ui').append(aiReadout);
+    const questionInput=document.createElement('input');
+    questionInput.type='text'; questionInput.maxLength=480;
+    questionInput.placeholder='輸入問題測試 AI';
+    questionInput.setAttribute('aria-label','輸入問題測試 AI');
+    questionInput.style.cssText='width:180px;color:white;background:#11212b;border:1px solid #677;padding:8px';
+    const questionButton=document.createElement('button');
+    questionButton.textContent='送出問題';
+    const submitQuestion=()=>{const text=questionInput.value.trim();if(text.length<2)return;questionInput.value='';askMirror(text);};
+    questionButton.addEventListener('click',submitQuestion);
+    questionInput.addEventListener('keydown',e=>{e.stopPropagation();if(e.key==='Enter')submitQuestion();});
+    document.querySelector('#controls').append(questionInput,questionButton);
     const echoEl=document.querySelector('#echo');
     const senseEl=document.querySelector('#sensitivity');
     const silkEl=document.querySelector('#silk');
@@ -865,7 +895,7 @@
       triggerEcho(.5,.5,strength);
       impulse=Math.max(impulse,strength*.72);
       responseHoldUntil=performance.now()+2600+strength*1500;
-      showSubtitle(data.reply||'水面仍在聽。','reply',exhibitionMode?30000:12000);
+      showSubtitle(data.reply,'reply',Math.max(exhibitionMode?30000:12000,data.reply.length*300));
       if(data.speak && 'speechSynthesis' in window){
         speechSynthesis.cancel();
         const utterance=new SpeechSynthesisUtterance(data.reply);
@@ -876,48 +906,6 @@
       }
     }
 
-    const localReplyPools={
-      comfort:[
-        '你的疲倦落下來，水面替它慢慢散開。',
-        '這句話先沉在柔光裡，不必急著浮起。',
-        '深流接住了重量，讓波紋替你呼吸。'
-      ],
-      joy:[
-        '水面亮了一層，像月光也聽見了。',
-        '這份歡喜正沿著波紋，向遠處閃動。',
-        '一束輕盈的水光，正在為你展開。'
-      ],
-      question:[
-        '問題落進深水，倒影正在換一種方向。',
-        '答案還沒浮起，水面先替你留一圈光。',
-        '讓這個疑問漂一會，深處會回來碰你。'
-      ],
-      calm:[
-        '水面把聲音放低，只留下緩慢的微光。',
-        '此刻不用回答，讓深流安靜地經過。',
-        '波紋正在變薄，替你留下一小片靜。'
-      ],
-      unclear:[
-        '聲音擦過水面，我仍在波紋裡聽你。',
-        '這句話化成霧了，水面替它留著位置。',
-        '再靠近水面一點，讓倒影聽得更清楚。'
-      ]
-    };
-
-    function localMirrorReply(text){
-      const comfort=/累|難過|傷心|痛|孤單|壓力|怕|焦慮|不好|哭/.test(text);
-      const joy=/開心|喜歡|快樂|很好|漂亮|美|愛|成功/.test(text);
-      const calm=/安靜|休息|慢|睡|放鬆|平靜/.test(text);
-      const question=/[？?]|為什麼|怎麼|什麼|嗎|呢/.test(text);
-      const intent=comfort?'comfort':joy?'joy':calm?'calm':question?'question':'unclear';
-      let hash=0;
-      for(let i=0;i<text.length;i++) hash=(hash*31+text.charCodeAt(i))>>>0;
-      const pool=localReplyPools[intent];
-      const color=/紫/.test(text)?'violet':/綠|青/.test(text)?'mint':/白|亮/.test(text)?'pearl':'moon_blue';
-      const motion=intent==='comfort'?'soft_bloom':intent==='calm'?'still_mirror':intent==='joy'?'gentle_echo':'slow_fold';
-      return {ok:true,reply:pool[hash%pool.length],intent,palette:color,motion,intensity:.38+(hash%31)/100,speak:false};
-    }
-
     async function askMirror(text){
       const clean=String(text||'').replace(/\s+/g,' ').trim().slice(0,480);
       if(clean.length<2) return;
@@ -925,18 +913,34 @@
       responseInFlight=true;
       responseHoldUntil=0;
       status.classList.add('live');
-      statusText.textContent='水面正在回應';
+      statusText.textContent='AI 正在思考';
+      aiReadout.textContent='AI 連線中 · 正在等候實際回答';
       showSubtitle(`「${clean}」`,'heard',3600);
 
       try{
-        await new Promise(resolve=>setTimeout(resolve,620+Math.min(980,clean.length*24)));
-        const data=localMirrorReply(clean);
+        document.body.dataset.aiState='connecting';
+        const response=await fetch(GAS_ENDPOINT,{
+          method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+          body:JSON.stringify({clientId:apiClientId,text:clean,history:conversationHistory.slice(-4)}),
+          signal:AbortSignal.timeout(45000)
+        });
+        if(!response.ok) throw new Error('HTTP '+response.status);
+        const data=await response.json();
+        if(!data.ok) throw new Error(data.error||'AI 後端回覆失敗');
+        if(typeof data.reply!=='string'||!data.reply.trim()) throw new Error('AI 未傳回回答文字');
+        document.body.dataset.aiState='connected';
+        statusText.textContent='AI 已回覆';
+        aiReadout.textContent='AI 已回覆 · GAS → OpenAI · '+new Date().toLocaleTimeString('zh-TW');
         conversationHistory.push({role:'user',text:clean},{role:'assistant',text:data.reply});
         if(conversationHistory.length>8) conversationHistory.splice(0,conversationHistory.length-8);
         applyMirrorReply(data);
       }catch(error){
-        console.warn('Local mirror reply unavailable:',error);
-        showSubtitle('水面暫時沒有回答，仍在聽你。','error',4200);
+        console.warn('Mirror AI unavailable:',error);
+        document.body.dataset.aiState='error';
+        const reason=error.name==='TimeoutError'?'連線超時':error.message;
+        statusText.textContent='AI 連線失敗';
+        aiReadout.textContent='AI 連線失敗 · '+reason;
+        showSubtitle('AI 暫時無法回答：'+reason,'error',15000);
         triggerEcho(.5,.5,.28);
       }finally{
         responseInFlight=false;
@@ -1125,7 +1129,7 @@
     function showMicrophoneOnboarding(){
       startKicker.textContent='展前設定・只需一次';
       startTitle.textContent='啟用水鏡聆聽';
-      startCopy.textContent='允許一次後，同一網址會直接回到聆聽。聲音用於即時視覺與瀏覽器語音辨識；瀏覽器可能使用其雲端語音服務。公開版不連接 GAS／OpenAI，也不儲存對話。';
+      startCopy.textContent='允許一次後，同一網址會直接回到聆聽。聲音用於即時視覺與瀏覽器語音辨識；瀏覽器可能使用其雲端語音服務。辨識文字與最近兩輪對話會傳至作品的 GAS／OpenAI 產生回答；本站不保存對話紀錄。';
       startBtn.textContent='允許麥克風並進入展覽';
       document.querySelector('#start').classList.remove('hidden');
       statusText.textContent='等待展前麥克風設定';
