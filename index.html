@@ -476,8 +476,8 @@
         float cameraSpeed=mix(.055,.135,uAwake)+uVoice*.075+uResponse*.095+uWind*.045;
         float cameraBank=sin(uTime*.071)*.105+sin(uTime*.193+1.7)*.028+(uSpectrum[6]-uSpectrum[17])*.055;
         mat2 bankMatrix=mat2(cos(cameraBank),-sin(cameraBank),sin(cameraBank),cos(cameraBank));
-        vec2 cameraOrbit=vec2(sin(uTime*.083+1.1),cos(uTime*.061-1.4))*(.055+.045*uWind);
-        float cameraDolly=sin(uTime*.097)*.18+sin(uTime*.037+2.4)*.12;
+        vec2 cameraOrbit=vec2(sin(uTime*.083+1.1)*1.4,cos(uTime*.061-1.4))*(.14+.09*uWind);
+        float cameraDolly=sin(uTime*.097)*.40+sin(uTime*.037+2.4)*.22;
         vec2 cameraView=bankMatrix*(uv+gaze*.58);
         vec3 rayOrigin=vec3(gaze*.68+cameraOrbit,3.35+cameraDolly);
         vec3 rayDirection=normalize(vec3(cameraView*vec2(.79,.70),-1.34+uResponse*.045));
@@ -511,7 +511,9 @@
           float scoreFold=sin(p.x*(2.4+midSpectrum*2.8)+flowZ*(1.15+lowSpectrum*1.6)+uTime*.14);
           scoreFold+=sin(p.x*6.7-flowZ*.72+uTime*.09)*.27;
           float spectralRibbon=exp(-abs(p.y-scoreFold*(.16+.10*midSpectrum)+.08)*mix(8.,15.,depth01));
-          spectralRibbon*=.24+.76*midSpectrum;
+          spectralRibbon*=.52+.76*midSpectrum;
+          float driftingFold=p.y+.26-sin(p.x*3.2-flowZ*1.8-uTime*.27)*.23;
+          spectralRibbon+=exp(-abs(driftingFold)*28.)*(.42+.38*uWind);
           float curtainMass=leftCurtain+rightCurtain+roofCurtain+floorCurtain+diagonalCurtain*.55;
           float microFibers=pow(.5+.5*sin(p.y*29.+p.x*17.+flowZ*16.5),mix(31.,19.,clamp(uSilk/1.8,0.,1.)));
 
@@ -608,6 +610,17 @@
         float rainRing=exp(-abs(length(rainLocal)-rainRadius)*55.)*(1.-rainAge);
         rainRing*=smoothstep(.72,.98,rainSeed)*uRain;
         col+=palette(uPalette,.92)*rainRing*(.18+.28*uRain);
+        // Independent expanding wave packets remain visible even in dry weather.
+        for(int k=0;k<3;k++){
+          float fk=float(k);
+          vec2 origin=vec2(sin(fk*2.4+uTime*.035)*.48,cos(fk*3.1+uTime*.029)*.27);
+          float age=mod(uTime*.32+fk*1.7,5.);
+          float radius=age*.20;
+          float distanceToWave=length((uv-origin)*vec2(1.,1.7))-radius;
+          float packet=exp(-distanceToWave*distanceToWave*220.)*sin(distanceToWave*100.-age*2.);
+          float life=smoothstep(0.,.6,age)*(1.-smoothstep(3.2,5.,age));
+          col+=palette(uPalette,.75)*max(0.,packet)*life*(.055+.10*uVoice+.07*uRain);
+        }
 
         // 細碎交錯波紋黏在水幕表面，雲與濕度增加擴散感。
         float surfaceNoise=fbm(uv*3.8+vec2(-uTime*.055,uTime*.035));
@@ -705,6 +718,12 @@
     };
     const weather={rain:0,wind:.18,cloud:.28,night:0};
     const weatherTarget={rain:0,wind:.18,cloud:.28,night:0};
+    let weatherPalette=0, paletteOverrideUntil=0;
+    const weatherReadout=document.createElement('div');
+    weatherReadout.className='hint';
+    weatherReadout.style.cssText='top:100px;bottom:auto;max-width:340px';
+    weatherReadout.textContent='天氣資料載入中';
+    document.querySelector('.ui').append(weatherReadout);
     const echoEl=document.querySelector('#echo');
     const senseEl=document.querySelector('#sensitivity');
     const silkEl=document.querySelector('#silk');
@@ -732,10 +751,11 @@
       try{
         const fields='temperature_2m,relative_humidity_2m,precipitation,weather_code,cloud_cover,wind_speed_10m,is_day';
         const url=`https://api.open-meteo.com/v1/forecast?latitude=${weatherLocation.lat}&longitude=${weatherLocation.lon}&current=${fields}&timezone=auto`;
-        const response=await fetch(url,{cache:'no-store'});
+        const response=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(10000)});
         if(!response.ok) throw new Error(`Weather HTTP ${response.status}`);
         const data=await response.json();
         const current=data.current||{};
+        if(!Number.isFinite(current.temperature_2m)||!Number.isFinite(current.wind_speed_10m)||!current.time) throw new Error('Incomplete weather data');
         const code=Number(current.weather_code)||0;
         const precipitation=Number(current.precipitation)||0;
         const codedRain=(code>=95?.95:(code>=80?.72:(code>=51?.44:0)));
@@ -745,12 +765,22 @@
         weatherTarget.night=Number(current.is_day)===0?1:0;
         document.body.dataset.weather=String(code);
         document.body.dataset.temperature=String(current.temperature_2m??'');
+        document.body.dataset.weatherSource='live';
+        document.body.dataset.weatherUpdated=current.time;
+        weatherPalette=current.is_day===0?2.1:current.precipitation>0?.25:current.temperature_2m>26?3.15:1.1;
+        weatherReadout.textContent='即時天氣（預設台北／可指定座標） · '+current.temperature_2m+'°C · 風 '+current.wind_speed_10m+' km/h · 雨 '+current.precipitation+' mm · 資料時間 '+current.time;
       }catch(error){
         const hour=new Date().getHours();
         weatherTarget.night=(hour<6||hour>=18)?1:0;
         console.warn('Weather atmosphere unavailable:',error);
+        document.body.dataset.weatherSource='unavailable';
+        weatherReadout.textContent='天氣更新失敗：目前沿用先前氛圍，非即時資料';
       }finally{
         const preview=pageParams.get('weather');
+        if(['rain','storm','clear'].includes(preview)){
+          document.body.dataset.weatherSource='simulation';
+          weatherReadout.textContent='模擬天氣：'+preview+'（非即時天氣）';
+        }
         if(preview==='rain') Object.assign(weatherTarget,{rain:.92,wind:.58,cloud:.86});
         if(preview==='storm') Object.assign(weatherTarget,{rain:1,wind:.92,cloud:1,night:.65});
         if(preview==='clear') Object.assign(weatherTarget,{rain:0,wind:.16,cloud:.12});
@@ -809,6 +839,7 @@
       if(paletteDelta>2) paletteDelta-=4;
       if(paletteDelta<-2) paletteDelta+=4;
       paletteTarget=palette+paletteDelta;
+      paletteOverrideUntil=performance.now()+18000;
       const motion=motionSettings[data.motion]||motionSettings.gentle_echo;
       silkEl.value=String(motion.silk);
       echoEl.value=String(motion.echo);
@@ -1011,7 +1042,12 @@
         document.body.dataset.phase=phase;
         phaseText.textContent=phase==='listening'?'正在聽':phase==='thinking'?'沉入水中':phase==='reply'?'水面回應':'';
       }
-      palette=easeToward(palette,paletteTarget,.48,dt);
+      if(ms>paletteOverrideUntil){
+        const desired=weatherPalette+.42*Math.sin(ms*.000021)+.18*Math.sin(ms*.000047);
+        let delta=((desired-palette)%4+6)%4-2;
+        paletteTarget=palette+delta;
+      }
+      palette=easeToward(palette,paletteTarget,.12,dt);
       silkVisual=easeToward(silkVisual,Number(silkEl.value),.72,dt);
       weather.rain=easeToward(weather.rain,weatherTarget.rain,.18,dt);
       weather.wind=easeToward(weather.wind,weatherTarget.wind,.11,dt);
