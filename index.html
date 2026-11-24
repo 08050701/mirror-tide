@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#05080f" />
   <meta name="referrer" content="no-referrer" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.open-meteo.com https://script.google.com https://script.googleusercontent.com; img-src 'self' data:; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.open-meteo.com https://script.google.com https://script.googleusercontent.com; img-src 'self' data:; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
   <title>水鏡絲綢 — 聲音視覺化</title>
   <style>
     :root {
@@ -343,6 +343,32 @@
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { transition-duration: .01ms !important; }
     }
+
+    /* Water typography: the readable text stays steady; only its reflection drifts. */
+    .subtitle-wrap, body.screen-only .subtitle-wrap { bottom:22vh; width:min(78vw,850px); }
+    .subtitle, .subtitle[data-state="reply"] {
+      position:relative; padding:0; border:0; border-radius:0; background:transparent;
+      box-shadow:none; backdrop-filter:none; font-weight:400;
+      font-size:clamp(1.15rem,2.15vw,1.8rem); line-height:1.9; letter-spacing:.16em;
+      text-shadow:0 0 14px #bed9ed55,0 2px 8px #020812;
+      filter:blur(8px); transform:translateY(12px);
+      transition:opacity 1.2s ease,filter 1.7s ease,transform 1.7s ease;
+    }
+    .subtitle.show {filter:blur(0);transform:translateY(0);}
+    .subtitle::after {
+      content:attr(data-reflection);position:absolute;left:0;right:0;top:110%;
+      transform:scaleY(-.48);transform-origin:center top;filter:blur(2.2px);
+      opacity:.17;mask-image:linear-gradient(transparent,#000);pointer-events:none;
+      animation:waterReflection 9s ease-in-out infinite alternate;
+    }
+    @keyframes waterReflection {to{transform:translateX(7px) skewX(5deg) scaleY(-.44);opacity:.08;}}
+    body.screen-only .subtitle[data-state="heard"] {opacity:0!important;visibility:hidden;}
+    body.screen-only .phase-signal span {opacity:0;}
+    .sound-note {font-size:.78rem;line-height:1.6;max-width:260px;color:#b8cbd5;}
+    .voice-consent {display:block;font-size:.82rem;line-height:1.6;margin:10px 0;color:#c6dbe5;}
+    .controls {max-height:75vh;overflow:auto;scrollbar-width:thin;}
+    .controls>button {font-size:.8rem;padding:9px 12px;margin:3px 2px;}
+    @media(prefers-reduced-motion:reduce){.subtitle::after{animation:none}.subtitle{transition:opacity .5s;transform:none;filter:none}}
   </style>
 </head>
 <body>
@@ -374,6 +400,7 @@
     <div class="hint">點擊水面喚醒，再說一句話<br />移動游標撥動絲流・S 純畫面</div>
   </main>
 
+  <script src="water-voice.js"></script>
   <script>
     const canvas = document.querySelector('#gl');
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance' });
@@ -714,6 +741,7 @@
     let awake=false, hoverVibration=0, pureScreen=false;
     let responseInFlight=false, queuedSpeech='', pendingFinalText='', finalSpeechTimer=0;
     const TURN_PAUSE_MS=2800;
+    let speechTurnStartedAt=0;
     let pendingInterimText='', lastSpeechActivityAt=0;
     let rawLevel=0, voiceEnvelope=0, thinkingEnvelope=0, responseEnvelope=0;
     let responseHoldUntil=0, nextSpeechRestartAt=0, demoCycleIndex=-1;
@@ -774,6 +802,18 @@
     const startTitle=document.querySelector('#title');
     const startCopy=document.querySelector('#startCopy');
     const startBtn=document.querySelector('#startBtn');
+    const waterVoice=new WaterVoice({subtitle,controls:document.querySelector('#controls'),
+      suspendListening:()=>{
+        clearTimeout(finalSpeechTimer);
+        recognition?.abort();
+        statusText.textContent='水面正在說話';
+      },
+      resumeListening:()=>{
+        statusText.textContent=demoMode?'展示模式':'水室持續聆聽';
+        if(running&&!speechBlocked&&!demoMode){awake=true;startSpeech();statusText.textContent='水室持續聆聽';}
+      }
+    });
+
 
     function resize(){
       const dpr=Math.min(devicePixelRatio||1,2);
@@ -846,6 +886,8 @@
     }
 
     function showSubtitle(text,state='reply',duration=5200){
+      waterVoice.clearCaptions();
+      subtitle.dataset.reflection='';
       subtitle.textContent=text;
       subtitle.dataset.state=state;
       subtitle.classList.add('show');
@@ -897,21 +939,15 @@
       triggerEcho(.5,.5,strength);
       impulse=Math.max(impulse,strength*.72);
       responseHoldUntil=performance.now()+2600+strength*1500;
-      showSubtitle(data.reply,'reply',Math.max(exhibitionMode?30000:12000,data.reply.length*300));
-      if(data.speak && 'speechSynthesis' in window){
-        speechSynthesis.cancel();
-        const utterance=new SpeechSynthesisUtterance(data.reply);
-        utterance.lang='zh-TW';
-        utterance.rate=.86;
-        utterance.pitch=.92;
-        speechSynthesis.speak(utterance);
-      }
+      waterVoice.reply(data);
     }
 
     async function askMirror(text){
       const clean=String(text||'').replace(/\s+/g,' ').trim().slice(0,480);
       if(clean.length<2) return;
       if(responseInFlight){ queuedSpeech=clean; return; }
+      waterVoice.beginTurn(clean,speechTurnStartedAt?performance.now()-speechTurnStartedAt:0);
+      speechTurnStartedAt=0;
       responseInFlight=true;
       responseHoldUntil=0;
       status.classList.add('live');
@@ -950,11 +986,12 @@
           const next=queuedSpeech;
           queuedSpeech='';
           setTimeout(()=>askMirror(next),260);
-        }else setSleeping();
+        }else if(!waterVoice.speaking) setSleeping();
       }
     }
 
     function markSpeechActivity(){
+      if(!speechTurnStartedAt)speechTurnStartedAt=performance.now();
       lastSpeechActivityAt=performance.now();
       clearTimeout(finalSpeechTimer);
     }
@@ -981,6 +1018,7 @@
     function readAudio(ms){
       if(!analyser) return;
       analyser.getByteTimeDomainData(timeData);
+      waterVoice.observe(timeData,audioCtx.sampleRate,ms);
       analyser.getByteFrequencyData(freqData);
       let sum=0;
       for(const v of timeData){ const x=(v-128)/128; sum+=x*x; }
@@ -1028,6 +1066,7 @@
       previousFrameAt=ms;
       echoAge+=dt;
       readAudio(ms);
+      waterVoice.update(dt,{voice:voiceEnvelope,wind:weather.wind,rain:weather.rain,response:responseEnvelope});
       let voiceTarget=Math.max(0,Math.min(1,(rawLevel-.014)/.075));
       let thinkingTarget=responseInFlight?1:0;
       let responseTarget=ms<responseHoldUntil?1:0;
@@ -1117,10 +1156,10 @@
       gl.uniform1f(U.uThinking,thinkingEnvelope);
       gl.uniform1f(U.uResponse,responseEnvelope);
       gl.uniform1f(U.uRain,weather.rain);
-      gl.uniform1f(U.uWind,weather.wind);
+      gl.uniform1f(U.uWind,Math.min(1,weather.wind+waterVoice.pressure*.4));
       gl.uniform1f(U.uCloud,weather.cloud);
       gl.uniform1f(U.uNight,weather.night);
-      gl.uniform1f(U.uFlux,spectralFlux);
+      gl.uniform1f(U.uFlux,Math.min(1,spectralFlux+waterVoice.pressure*.18));
       gl.uniform1fv(U.uSpectrum,spectrumBands);
       gl.uniform1fv(U.uWaveform,waveformBands);
       const pulse=Math.min(1,level*5+impulse*.45);
@@ -1177,7 +1216,7 @@
     }
 
     function startSpeech(){
-      if(speechBlocked||speechActive) return;
+      if(speechBlocked||speechActive||waterVoice.speaking) return;
       const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
       if(!SR) return;
       if(!recognition){
@@ -1192,7 +1231,7 @@
         if(awake) statusText.textContent='水面已醒・正在聆聽';
       };
       recognition.onresult=e=>{
-        if(!awake) return;
+        if(!awake||waterVoice.speaking) return;
         markSpeechActivity();
         let finalText='',interim='';
         for(let i=e.resultIndex;i<e.results.length;i++){
@@ -1204,8 +1243,8 @@
         if(finalText.trim()) queueFinalSpeech(finalText.trim());
         else scheduleSpeechTurn();
       };
-      recognition.onspeechstart=()=>{ if(awake) markSpeechActivity(); };
-      recognition.onspeechend=()=>{ if(awake){ lastSpeechActivityAt=performance.now(); scheduleSpeechTurn(); } };
+      recognition.onspeechstart=()=>{ if(awake&&!waterVoice.speaking) markSpeechActivity(); };
+      recognition.onspeechend=()=>{ if(awake&&!waterVoice.speaking){ lastSpeechActivityAt=performance.now(); scheduleSpeechTurn(); } };
       recognition.onerror=e=>{
         if(e.error==='not-allowed'||e.error==='service-not-allowed'){
           speechBlocked=true;
@@ -1216,6 +1255,7 @@
       // 一般模式等待觀眾再喚醒；展覽模式沿用同一個已授權的辨識器自動復原。
       recognition.onend=()=>{
         speechActive=false;
+        if(waterVoice.speaking)return;
         // A recognition service disconnect is not the end of a person's turn.
         // Retain only confirmed segments; never silently submit a truncated interim result.
         if(pendingInterimText){
@@ -1276,6 +1316,7 @@
     }
 
     startBtn.addEventListener('click',async()=>{
+      if(!waterVoice.enabled)await waterVoice.toggle();
       if(exhibitionMode){
         startBtn.disabled=true;
         startBtn.textContent='正在開啟聆聽…';
@@ -1340,13 +1381,14 @@
     addEventListener('keydown',e=>{
       const key=e.key.toLowerCase();
       if(key==='f') document.querySelector('#fullBtn').click();
+      if(key==='m') waterVoice.toggle();
       if(key==='s'){
         pureScreen=!pureScreen;
         document.body.classList.toggle('screen-only',pureScreen);
       }
       if((key===' '||key==='enter')&&running&&!awake&&!demoMode) wakeMirror();
     });
-    addEventListener('beforeunload',()=>{ running=false; stream?.getTracks().forEach(t=>t.stop()); recognition?.stop(); });
+    addEventListener('beforeunload',()=>{ waterVoice.dispose(); running=false; stream?.getTracks().forEach(t=>t.stop()); recognition?.stop(); });
 
     loadWeather();
     addEventListener('online',()=>loadWeather());
