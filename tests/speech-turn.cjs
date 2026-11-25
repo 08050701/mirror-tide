@@ -4,7 +4,7 @@ const code=html.slice(html.indexOf('    function markSpeechActivity(){'),html.in
 const event=html.slice(html.indexOf('      recognition.onresult=e=>{'),html.indexOf('      recognition.onspeechstart='));
 let now=0,id=0,timers=new Map(),sent=[];
 const ctx=vm.createContext({performance:{now:()=>now},setTimeout:(fn,delay)=>{timers.set(++id,{fn,at:now+delay});return id;},clearTimeout:i=>timers.delete(i),askMirror:s=>sent.push(s),showSubtitle:()=>{},recognition:{},waterVoice:{speaking:false}});
-vm.runInContext("let speechTurnStartedAt=0;let pendingFinalText='',pendingInterimText='',lastSpeechActivityAt=0,finalSpeechTimer=0,awake=true;const TURN_PAUSE_MS=2800,exhibitionMode=true;"+code+event,ctx);
+vm.runInContext("let sessionClosed=false,responseInFlight=false,speechTurnStartedAt=0;let pendingFinalText='',pendingInterimText='',lastSpeechActivityAt=0,finalSpeechTimer=0,awake=true;const TURN_PAUSE_MS=2800,exhibitionMode=true;"+code+event,ctx);
 function advance(ms){now+=ms;for(const [i,t] of [...timers])if(t.at<=now){timers.delete(i);t.fn();}}
 function result(text,final){ctx.recognition.onresult({resultIndex:0,results:[Object.assign([{transcript:text}],{isFinal:final})]});}
 result('我想說',true);advance(1000);result('還沒講完',false);advance(5000);assert.equal(sent.length,0,'interim must block submission');

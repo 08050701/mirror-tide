@@ -381,8 +381,9 @@
     <section id="start" class="start" aria-labelledby="title">
       <p class="start-kicker">聲音讓深水甦醒</p>
       <h1 id="title">水鏡・深潛</h1>
-      <p id="startCopy">點一下喚醒水室。你的一句話會化成一道從深處靠近的水光，再慢慢沉回安靜。</p>
+      <p id="startCopy">喚醒水鏡後，你可以問五個問題。辨識文字會傳送給作品的 AI 回答。</p>
       <button id="startBtn" type="button">喚醒水鏡</button>
+      <label class="voice-consent"><input id="wakeProsody" type="checkbox"> 讓水鏡在這五題呼應我的語速與音高</label>
     </section>
 
     <section id="controls" class="controls" aria-label="視覺控制">
@@ -400,7 +401,7 @@
     <div class="hint">點擊水面喚醒，再說一句話<br />移動游標撥動絲流・S 純畫面</div>
   </main>
 
-  <script src="water-voice.js"></script>
+  <script src="water-voice.js?v=five-turns"></script>
   <script>
     const canvas = document.querySelector('#gl');
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance' });
@@ -487,7 +488,7 @@
         float swellA=sin(uv.x*3.2+uTime*swellSpeed+sin(uv.y*2.1-uTime*.13));
         float swellB=sin(uv.y*5.7-uTime*(.17+uWind*.22)+uv.x*1.8);
         float swellC=sin((uv.x+uv.y)*9.4+uTime*.31)*.35;
-        vec2 waterWarp=vec2(swellA+swellC,swellB-swellC)*(.010+.010*uWind+.008*uVoice);
+        vec2 waterWarp=vec2(swellA+swellC,swellB-swellC)*(.010+.020*uWind+.008*uVoice);
         uv+=waterWarp;
 
         // 展場攝影機會自行漂移；uPointer 在展覽模式由低頻 Lissajous 路徑驅動。
@@ -739,7 +740,47 @@
     let echoOrigin={x:.5,y:.5}, echoAge=8, echoStrength=0, lastEchoAt=0, previousFrameAt=0;
     let pointer={x:.5,y:.5}, previousPointer={x:.5,y:.5,time:performance.now()}, palette=0, paletteTarget=0, silkVisual=1.05, running=false;
     let awake=false, hoverVibration=0, pureScreen=false;
-    let responseInFlight=false, queuedSpeech='', pendingFinalText='', finalSpeechTimer=0;
+    let responseInFlight=false, pendingFinalText='', finalSpeechTimer=0;
+    const MAX_TURNS=5;
+    const invitation='你可以問我五個問題。';
+    const closingLine='不要再問我了。';
+    let answeredTurns=0, sessionClosed=false, sessionTimer=0;
+    function showListeningStatus(){
+      statusText.textContent=demoMode?'文字排練 · '+answeredTurns+' / '+MAX_TURNS:'正在聆聽 · '+answeredTurns+' / '+MAX_TURNS;
+    }
+    function closeSession(){
+      sessionClosed=true;
+      awake=false;
+      clearTimeout(finalSpeechTimer);
+      pendingFinalText=pendingInterimText='';
+      recognition?.abort();
+      statusText.textContent='五題已答完';
+      questionInput.disabled=questionButton.disabled=true;
+    }
+    function waitForNextVisitor(delay=18000){
+      if(!sessionClosed||sessionTimer)return;
+      sessionTimer=setTimeout(()=>{
+        sessionTimer=0;
+        answeredTurns=0;
+        sessionClosed=false;
+        conversationHistory.length=0;
+        speechTurnStartedAt=0;
+        waterVoice.resetVisitor();
+        document.body.dataset.turn='0';
+        questionInput.disabled=questionButton.disabled=false;
+        showInvitation(false);
+      },delay);
+    }
+    function showInvitation(spoken){
+      if(!sessionClosed)showListeningStatus();
+      if(spoken&&waterVoice.enabled){
+        waterVoice.reply({reply:invitation,intent:'calm',turn:0});
+        if(waterVoice.speaking)return;
+      }
+      showSubtitle(invitation,'invitation',6500);
+      awake=true;
+      if(!demoMode)startSpeech();
+    }
     const TURN_PAUSE_MS=2800;
     let speechTurnStartedAt=0;
     let pendingInterimText='', lastSpeechActivityAt=0;
@@ -805,12 +846,16 @@
     const waterVoice=new WaterVoice({subtitle,controls:document.querySelector('#controls'),
       suspendListening:()=>{
         clearTimeout(finalSpeechTimer);
+        pendingInterimText='';
         recognition?.abort();
         statusText.textContent='水面正在說話';
       },
       resumeListening:()=>{
-        statusText.textContent=demoMode?'展示模式':'水室持續聆聽';
-        if(running&&!speechBlocked&&!demoMode){awake=true;startSpeech();statusText.textContent='水室持續聆聽';}
+        if(!running)return;
+        if(sessionClosed){statusText.textContent='五題已答完';waitForNextVisitor();return;}
+        showListeningStatus();
+        awake=true;
+        if(!demoMode){startSpeech();scheduleSpeechTurn();}
       }
     });
 
@@ -895,23 +940,8 @@
       subtitle._timer=setTimeout(()=>subtitle.classList.remove('show'),duration);
     }
 
-    function setSleeping(){
-      if(exhibitionMode){
-        awake=true;
-        status.classList.add('live');
-        status.classList.remove('resume');
-        statusText.textContent='水室持續聆聽';
-        return;
-      }
-      awake=false;
-      if(demoMode) return;
-      status.classList.remove('live');
-      status.classList.add('resume');
-      statusText.textContent='水面沉睡・點擊喚醒';
-    }
-
     async function wakeMirror(){
-      if(responseInFlight||speechBlocked) return;
+      if(responseInFlight||speechBlocked||sessionClosed||waterVoice.speaking) return;
       if(!running) revealExperience();
       if(!stream) await startAudio();
       awake=true;
@@ -939,14 +969,16 @@
       triggerEcho(.5,.5,strength);
       impulse=Math.max(impulse,strength*.72);
       responseHoldUntil=performance.now()+2600+strength*1500;
-      waterVoice.reply(data);
+      const final=answeredTurns===MAX_TURNS;
+      if(final)closeSession();
+      waterVoice.reply({...data,turn:answeredTurns,closing:final?closingLine:''});
+      if(final&&!waterVoice.speaking)waitForNextVisitor(Math.max(18000,waterVoice.captionDuration+2000));
     }
 
     async function askMirror(text){
       const clean=String(text||'').replace(/\s+/g,' ').trim().slice(0,480);
-      if(clean.length<2) return;
-      if(responseInFlight){ queuedSpeech=clean; return; }
-      waterVoice.beginTurn(clean,speechTurnStartedAt?performance.now()-speechTurnStartedAt:0);
+      if(clean.length<2||sessionClosed||responseInFlight||waterVoice.speaking) return;
+      waterVoice.beginTurn(clean,speechTurnStartedAt?lastSpeechActivityAt-speechTurnStartedAt:0);
       speechTurnStartedAt=0;
       responseInFlight=true;
       responseHoldUntil=0;
@@ -971,6 +1003,8 @@
         aiReadout.textContent='AI 已回覆 · GAS → OpenAI · '+new Date().toLocaleTimeString('zh-TW');
         conversationHistory.push({role:'user',text:clean},{role:'assistant',text:data.reply});
         if(conversationHistory.length>8) conversationHistory.splice(0,conversationHistory.length-8);
+        answeredTurns++;
+        document.body.dataset.turn=String(answeredTurns);
         applyMirrorReply(data);
       }catch(error){
         console.warn('Mirror AI unavailable:',error);
@@ -982,11 +1016,11 @@
         triggerEcho(.5,.5,.28);
       }finally{
         responseInFlight=false;
-        if(queuedSpeech){
-          const next=queuedSpeech;
-          queuedSpeech='';
-          setTimeout(()=>askMirror(next),260);
-        }else if(!waterVoice.speaking) setSleeping();
+        if(!sessionClosed&&!waterVoice.speaking){
+          awake=true;
+          showListeningStatus();
+          if(!demoMode&&running){startSpeech();scheduleSpeechTurn();}
+        }
       }
     }
 
@@ -998,13 +1032,12 @@
 
     function scheduleSpeechTurn(){
       clearTimeout(finalSpeechTimer);
-      if(!pendingFinalText||pendingInterimText) return;
+      if(!pendingFinalText||pendingInterimText||sessionClosed||responseInFlight||waterVoice.speaking) return;
       finalSpeechTimer=setTimeout(()=>{
-        if(pendingInterimText) return;
+        if(pendingInterimText||sessionClosed||responseInFlight||waterVoice.speaking) return;
         if(performance.now()-lastSpeechActivityAt<TURN_PAUSE_MS){ scheduleSpeechTurn(); return; }
         const phrase=pendingFinalText;
         pendingFinalText='';
-        if(!exhibitionMode) awake=false;
         askMirror(phrase);
       },TURN_PAUSE_MS);
     }
@@ -1018,7 +1051,7 @@
     function readAudio(ms){
       if(!analyser) return;
       analyser.getByteTimeDomainData(timeData);
-      waterVoice.observe(timeData,audioCtx.sampleRate,ms);
+      if(awake&&!sessionClosed&&!responseInFlight&&speechTurnStartedAt)waterVoice.observe(timeData,audioCtx.sampleRate,ms);
       analyser.getByteFrequencyData(freqData);
       let sum=0;
       for(const v of timeData){ const x=(v-128)/128; sum+=x*x; }
@@ -1183,7 +1216,7 @@
     function showMicrophoneOnboarding(){
       startKicker.textContent='展前設定・只需一次';
       startTitle.textContent='啟用水鏡聆聽';
-      startCopy.textContent='允許一次後，同一網址會直接回到聆聽。聲音用於即時視覺與瀏覽器語音辨識；瀏覽器可能使用其雲端語音服務。辨識文字與最近兩輪對話會傳至作品的 GAS／OpenAI 產生回答；本站不保存對話紀錄。';
+      startCopy.textContent='你可以問五個問題。允許一次後，同一網址會直接回到聆聽。聲音用於即時視覺與瀏覽器語音辨識；瀏覽器可能使用其雲端語音服務。辨識文字與最近兩輪對話會傳至作品的 GAS／OpenAI 產生回答；本站不保存對話紀錄。';
       startBtn.textContent='允許麥克風並進入展覽';
       document.querySelector('#start').classList.remove('hidden');
       statusText.textContent='等待展前麥克風設定';
@@ -1216,7 +1249,7 @@
     }
 
     function startSpeech(){
-      if(speechBlocked||speechActive||waterVoice.speaking) return;
+      if(demoMode||speechBlocked||speechActive||waterVoice.speaking||sessionClosed) return;
       const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
       if(!SR) return;
       if(!recognition){
@@ -1228,10 +1261,10 @@
       recognition.onstart=()=>{
         speechActive=true;
         status.classList.remove('resume');
-        if(awake) statusText.textContent='水面已醒・正在聆聽';
+        if(awake&&!responseInFlight)showListeningStatus();
       };
       recognition.onresult=e=>{
-        if(!awake||waterVoice.speaking) return;
+        if(!awake||waterVoice.speaking||sessionClosed) return;
         markSpeechActivity();
         let finalText='',interim='';
         for(let i=e.resultIndex;i<e.results.length;i++){
@@ -1255,7 +1288,7 @@
       // 一般模式等待觀眾再喚醒；展覽模式沿用同一個已授權的辨識器自動復原。
       recognition.onend=()=>{
         speechActive=false;
-        if(waterVoice.speaking)return;
+        if(waterVoice.speaking||sessionClosed||!awake)return;
         // A recognition service disconnect is not the end of a person's turn.
         // Retain only confirmed segments; never silently submit a truncated interim result.
         if(pendingInterimText){
@@ -1266,21 +1299,11 @@
           lastSpeechActivityAt=performance.now();
           scheduleSpeechTurn();
         }
-        if(exhibitionMode&&running&&!speechBlocked){
-          awake=true;
-          status.classList.add('live');
-          statusText.textContent='水室持續聆聽';
+        if(running&&!speechBlocked){
           nextSpeechRestartAt=performance.now()+1200;
           setTimeout(()=>{
-            if(exhibitionMode&&running&&!speechBlocked&&!speechActive&&performance.now()>=nextSpeechRestartAt) startSpeech();
+            if(running&&awake&&!speechActive&&performance.now()>=nextSpeechRestartAt) startSpeech();
           },1250);
-        }else{
-          awake=false;
-        }
-        if(!exhibitionMode&&running&&!speechBlocked){
-          status.classList.add('resume');
-          status.classList.remove('live');
-          statusText.textContent='辨識暫停・點擊喚醒';
         }
       };
       try{recognition.start();}catch{}
@@ -1312,10 +1335,12 @@
       pureScreen=true;
       document.body.classList.add('screen-only');
       statusText.textContent='水室持續聆聽';
-      if(!speechBlocked) startSpeech();
+      showInvitation(false);
     }
 
     startBtn.addEventListener('click',async()=>{
+      startBtn.disabled=true;
+      if(document.querySelector('#wakeProsody').checked)waterVoice.consent.checked=true;
       if(!waterVoice.enabled)await waterVoice.toggle();
       if(exhibitionMode){
         startBtn.disabled=true;
@@ -1332,11 +1357,14 @@
         document.body.classList.add('screen-only');
         statusText.textContent='水室持續聆聽';
         triggerEcho(.5,.5,.72);
-        if(!speechBlocked) startSpeech();
+        showInvitation(true);
         return;
       }
+      const ready=await startAudio();
+      startBtn.disabled=false;
+      if(!ready)return;
       revealExperience();
-      await wakeMirror();
+      showInvitation(true);
     });
 
     status.addEventListener('click',wakeMirror);
@@ -1352,7 +1380,7 @@
     }else if(demoMode){
       revealExperience();
       awake=true;
-      statusText.textContent='展示模式';
+      showInvitation(false);
       triggerEcho(.62,.56,.45);
       echoAge=.72;
       lastEchoAt=performance.now();
@@ -1381,14 +1409,14 @@
     addEventListener('keydown',e=>{
       const key=e.key.toLowerCase();
       if(key==='f') document.querySelector('#fullBtn').click();
-      if(key==='m') waterVoice.toggle();
+      if(key==='m'&&!e.repeat) waterVoice.toggle();
       if(key==='s'){
         pureScreen=!pureScreen;
         document.body.classList.toggle('screen-only',pureScreen);
       }
       if((key===' '||key==='enter')&&running&&!awake&&!demoMode) wakeMirror();
     });
-    addEventListener('beforeunload',()=>{ waterVoice.dispose(); running=false; stream?.getTracks().forEach(t=>t.stop()); recognition?.stop(); });
+    addEventListener('beforeunload',()=>{ running=false; clearTimeout(sessionTimer); waterVoice.dispose(); stream?.getTracks().forEach(t=>t.stop()); recognition?.stop(); });
 
     loadWeather();
     addEventListener('online',()=>loadWeather());

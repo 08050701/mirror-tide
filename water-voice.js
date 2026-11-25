@@ -3,7 +3,7 @@ class WaterVoice {
   constructor({subtitle, controls, suspendListening, resumeListening}) {
     Object.assign(this,{subtitle,controls,suspendListening,resumeListening});
     this.enabled=false; this.speaking=false; this.pressure=0; this.pitchHz=180;
-    this.pitchSamples=0; this.lastPitchAt=0; this.lastTurnAt=0; this.rate=.9;
+    this.pitchSamples=0; this.lastPitchAt=0; this.turnContour=[]; this.replyContour=[]; this.lastTurnAt=0; this.rate=.9;
     this.timers=[]; this.generation=0; this.captionMode=false; this.motif=0;
     this.button=document.createElement('button');
     this.button.textContent='啟用水聲與朗讀';
@@ -22,7 +22,7 @@ class WaterVoice {
     this.note.textContent='聲音需啟用一次。朗讀使用裝置聲線；勾選後才參考你的語速與音高，不複製音色。';
     const label=document.createElement('label'); label.className='voice-consent';
     this.consent=document.createElement('input');this.consent.type='checkbox';
-    this.consent.addEventListener('change',()=>{this.pitchHz=180;this.pitchSamples=0;this.rate=.9;});
+    this.consent.addEventListener('change',()=>{this.clearProsody();});
     label.append(this.consent,document.createTextNode('讓水呼應我的語速與音高（本次體驗）'));
     controls.append(this.button,this.captionButton,label,this.note);
   }
@@ -102,6 +102,15 @@ class WaterVoice {
       this.nextNote=t+4.8-this.pressure*2.7+Math.random()*1.8;
     }
   }
+  clearProsody(){
+    this.pitchHz=180;this.pitchSamples=0;this.rate=.9;
+    this.turnContour=[];this.replyContour=[];
+  }
+  resetVisitor(){
+    this.consent.checked=false;this.clearProsody();
+    this.currentReply='';this.clearCaptions();
+    this.pressure=0;this.lastTurnAt=0;
+  }
   observe(samples,sampleRate,ms) {
     if(!this.consent.checked||this.speaking||ms-this.lastPitchAt<150)return;
     this.lastPitchAt=ms;
@@ -117,14 +126,23 @@ class WaterVoice {
       const score=cross/Math.sqrt(a*b||1);
       if(score>best){best=score;bestLag=lag;}
     }
-    if(bestLag){this.pitchHz=this.pitchHz*.85+(sampleRate/bestLag)*.15;this.pitchSamples++;}
+    if(bestLag){
+      this.pitchHz=this.pitchHz*.75+(sampleRate/bestLag)*.25;
+      this.pitchSamples++;
+      if(this.turnContour.length===160)this.turnContour.shift();
+      this.turnContour.push(this.pitchHz);
+    }
   }
   beginTurn(text,duration) {
     const now=performance.now();
     this.pressure=Math.min(1,this.pressure+(this.lastTurnAt&&now-this.lastTurnAt<18000?.16:.055));
     this.lastTurnAt=now;
     if(/不要.*問|別.*問|先停|太急|慢一點/.test(text))this.pressure*=.35;
-    if(this.consent.checked&&duration>800)this.rate=Math.max(.72,Math.min(1.08,text.length/(duration/1000)/4));
+    this.replyContour=this.turnContour;
+    this.turnContour=[];
+    this.pitchSamples=0;
+    this.pitchHz=180;
+    this.rate=this.consent.checked&&duration>800?Math.max(.72,Math.min(1.18,text.length/(duration/1000)/4)):.86;
   }
   settle(intent) {
     if(intent==='calm'||intent==='comfort')this.pressure*=.76;
@@ -150,12 +168,13 @@ class WaterVoice {
   }
   present(text) {
     this.currentReply=text;this.clearCaptions();clearTimeout(this.subtitle._timer);
-    if(this.captionMode){this.floatText(text);return;}
+    if(this.captionMode){this.floatText(text);this.captionDuration=Math.max(5500,text.length*270);return;}
     let elapsed=0;
     for(const part of this.segments(text)){
       this.timers.push(setTimeout(()=>this.floatText(part),elapsed));
       elapsed+=Math.max(4200,part.length*270)+1200;
     }
+    this.captionDuration=elapsed;
     this.timers.push(setTimeout(()=>this.subtitle.classList.remove('show'),elapsed));
   }
   cancelSpeech(){
@@ -165,12 +184,19 @@ class WaterVoice {
     document.body.dataset.waterSpeaking='false';
   }
   reply(data) {
-    this.settle(data.intent);this.present(data.reply);
+    const turn=data.turn||0;
+    const tension=[0,.1,.25,.45,.72,1][turn]||0;
+    if(turn)this.pressure=tension;
+    else this.settle(data.intent);
+    const text=data.closing?data.reply+' '+data.closing:data.reply;
+    this.present(text);
     if(!this.enabled||!('speechSynthesis'in window))return;
     this.cancelSpeech();
     const generation=++this.generation;
     this.speaking=true;document.body.dataset.waterSpeaking='true';this.suspendListening();
-    const parts=this.segments(data.reply);let index=0;
+    const parts=this.segments(data.reply);
+    if(data.closing)parts.push(data.closing);
+    let index=0;
     const finish=(errorText='')=>{
       if(generation!==this.generation)return;
       clearTimeout(this.speechGuard);
@@ -188,22 +214,27 @@ class WaterVoice {
       const voices=speechSynthesis.getVoices();
       const selected=voices.find(v=>v.lang==='zh-TW')||voices.find(v=>v.lang.startsWith('zh'));
       if(selected)utterance.voice=selected;
-      utterance.rate=this.consent.checked?this.rate:.86;
-      utterance.pitch=this.consent.checked&&this.pitchSamples>3?Math.max(.8,Math.min(1.2,this.pitchHz/180)):1;
-      utterance.volume=.8;
+      const isClosing=Boolean(data.closing)&&index===parts.length;
+      const contour=this.replyContour;
+      const contourIndex=Math.round((contour.length-1)*(index-1)/Math.max(1,parts.length-1));
+      const mirror=this.consent.checked&&contour.length>3?tension:0;
+      const measuredPitch=mirror?Math.max(.78,Math.min(1.24,contour[contourIndex]/180)):1;
+      utterance.rate=.84+tension*.13+mirror*(this.rate-.86)+(isClosing?.12:0);
+      utterance.pitch=1+tension*.08+mirror*(measuredPitch-1)+(isClosing?.08:0);
+      utterance.volume=isClosing?.9:.8;
       utterance.onstart=()=>{
         if(generation!==this.generation)return;
         this.note.textContent='朗讀中 · '+index+' / '+parts.length+' 段 · 裝置合成聲線';
         this.clearCaptions();if(!this.captionMode)this.floatText(part);
       };
-      utterance.onend=()=>{if(generation===this.generation)this.resumeTimer=setTimeout(next,600);};
+      utterance.onend=()=>{if(generation===this.generation)this.resumeTimer=setTimeout(next,data.closing&&index===parts.length-1?1050:Math.round(650-tension*350));};
       utterance.onerror=()=>{
         if(generation!==this.generation)return;
-        this.present(data.reply);finish('裝置朗讀未能完成；已保留文字回答。');
+        this.present(text);finish('裝置朗讀未能完成；已保留文字回答。');
       };
       speechSynthesis.speak(utterance);
     };
-    this.speechGuard=setTimeout(()=>{if(generation===this.generation){this.cancelSpeech();this.present(data.reply);this.note.textContent='朗讀逾時，已恢復聆聽並保留文字。';}},90000);
+    this.speechGuard=setTimeout(()=>{if(generation===this.generation){this.cancelSpeech();this.present(text);this.note.textContent='朗讀逾時，已恢復聆聽並保留文字。';}},90000);
     next();
   }
   dispose(){this.cancelSpeech();this.clearCaptions();this.ctx?.close();}
